@@ -783,7 +783,7 @@ def main():
     print(f"👑 Администраторов: {len(ADMIN_IDS)}")
     print("Ожидание сообщений...")
     
-    application.run_polling(allowed_updates=Update.ALL_UPDATES)
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
