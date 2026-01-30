@@ -363,7 +363,6 @@ async def get_promo_code_handler(message: Message):
         f"🎉 *Ваш промо-код:* `{active_promo}`\n\n"
         f"Используйте его на нашем сайте!\n"
         f"Срок действия: бессрочно\n"
-        f"Осталось использований: {promo_codes[active_promo]['uses_left']}"
     )
     
     await message.answer(promo_message, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
