@@ -76,21 +76,46 @@ def load_data():
                 
                 data = json.loads(content)
             
-            user_sessions = data.get('user_sessions', {})
-            # Преобразуем строки обратно в datetime
-            for user_id, user_data in user_sessions.items():
-                for key in ['last_active', 'registered_at', 'promo_received_at']:
-                    if key in user_data and user_data[key]:
-                        try:
-                            user_data[key] = datetime.fromisoformat(user_data[key])
-                        except:
-                            user_data[key] = datetime.now()
+            # Преобразуем ключи из строк в int для user_sessions
+            user_sessions = {}
+            if 'user_sessions' in data:
+                for user_id_str, user_data in data['user_sessions'].items():
+                    try:
+                        user_id = int(user_id_str)
+                        # Преобразуем строки обратно в datetime
+                        for key in ['last_active', 'registered_at', 'promo_received_at']:
+                            if key in user_data and user_data[key]:
+                                try:
+                                    user_data[key] = datetime.fromisoformat(user_data[key])
+                                except:
+                                    user_data[key] = datetime.now()
+                        user_sessions[user_id] = user_data
+                    except ValueError:
+                        continue
             
             promo_codes = data.get('promo_codes', {})
             notifications = data.get('notifications', [])
             surveys = data.get('surveys', {})
-            broadcast_subscribers = data.get('broadcast_subscribers', {})
-            admin_ratings = data.get('admin_ratings', {})
+            
+            # Преобразуем ключи из строк в int для broadcast_subscribers
+            broadcast_subscribers = {}
+            if 'broadcast_subscribers' in data:
+                for user_id_str, is_subscribed in data['broadcast_subscribers'].items():
+                    try:
+                        user_id = int(user_id_str)
+                        broadcast_subscribers[user_id] = is_subscribed
+                    except ValueError:
+                        continue
+            
+            # Преобразуем ключи из строк в int для admin_ratings
+            admin_ratings = {}
+            if 'admin_ratings' in data:
+                for admin_id_str, rating_data in data['admin_ratings'].items():
+                    try:
+                        admin_id = int(admin_id_str)
+                        admin_ratings[admin_id] = rating_data
+                    except ValueError:
+                        continue
             
             logger.info(f"Данные загружены из {DATA_FILE}")
             logger.info(f"Пользователей: {len(user_sessions)}")
@@ -191,7 +216,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     welcome_text = (
         f"{greeting}\n\n"
-        "Доступные функции:\n"
+        "Выберите действие из меню ниже:\n\n"
         "• 🎁 Получить промо-код - получить промо-код\n"
         "• 🆘 Связаться с поддержкой - получить помощь специалиста\n"
         "• 📢 Управление рассылкой - настройки уведомлений\n"
@@ -219,9 +244,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/promo - управление промо-кодами",
             "/broadcast - управление рассылкой",
             "/ratings - рейтинги администраторов",
-            "/notify - уведомления",
-            "/survey - управление опросами",
-            "/backup - резервное копирование",
             "/help - эта справка\n\n",
             
             "🎯 Функции:",
@@ -229,8 +251,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Создание промо-кодов",
             "• Просмотр статистики",
             "• Управление пользователями",
-            "• Создание опросов",
-            "• Система уведомлений",
             "• Управление рассылкой",
             "• Рейтинги администраторов"
         ]
@@ -267,16 +287,28 @@ async def get_promo_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_sessions[user_id]['total_messages'] += 1
     
     if is_admin(user_id):
+        keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                   [KeyboardButton("🆘 Связаться с поддержкой")],
+                   [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
         await update.message.reply_text(
-            "Вы администратор. Используйте /promo для управления промо-кодами."
+            "Вы администратор. Используйте /promo для управления промо-кодами.",
+            reply_markup=reply_markup
         )
         return
     
     # Проверяем, использовал ли уже промо-код
     if user_sessions.get(user_id, {}).get('promo_used', False):
+        keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                   [KeyboardButton("🆘 Связаться с поддержкой")],
+                   [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
         await update.message.reply_text(
             "❌ Вы уже использовали промо-код.\n"
-            "Один пользователь может получить только один промо-код."
+            "Один пользователь может получить только один промо-код.",
+            reply_markup=reply_markup
         )
         return
     
@@ -288,9 +320,15 @@ async def get_promo_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
             break
     
     if not active_promo:
+        keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                   [KeyboardButton("🆘 Связаться с поддержкой")],
+                   [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
         await update.message.reply_text(
             "❌ В настоящее время нет доступных промо-кодов.\n"
-            "Попробуйте позже или свяжитесь с поддержкой."
+            "Попробуйте позже или свяжитесь с поддержкой.",
+            reply_markup=reply_markup
         )
         return
     
@@ -316,7 +354,12 @@ async def get_promo_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Осталось использований: {promo_codes[active_promo]['uses_left']}"
     )
     
-    await update.message.reply_text(promo_message, parse_mode=ParseMode.MARKDOWN)
+    keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+               [KeyboardButton("🆘 Связаться с поддержкой")],
+               [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(promo_message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     
     save_data()
 
@@ -330,21 +373,39 @@ async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_sessions[user_id]['support_requests'] = user_sessions[user_id].get('support_requests', 0) + 1
     
     if is_admin(user_id):
+        keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                   [KeyboardButton("🆘 Связаться с поддержкой")],
+                   [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
         await update.message.reply_text(
-            "Вы администратор. Используйте /admin для управления поддержкой."
+            "Вы администратор. Используйте /admin для управления поддержкой.",
+            reply_markup=reply_markup
         )
         return
     
     if user_id in active_support_requests:
         request = active_support_requests[user_id]
         if request['status'] == 'waiting':
+            keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                       [KeyboardButton("🆘 Связаться с поддержкой")],
+                       [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            
             await update.message.reply_text(
-                "⏳ Ваш запрос уже в очереди. Специалист скоро подключится."
+                "⏳ Ваш запрос уже в очереди. Специалист скоро подключится.",
+                reply_markup=reply_markup
             )
         elif request['status'] == 'active':
+            keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                       [KeyboardButton("🆘 Связаться с поддержкой")],
+                       [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            
             await update.message.reply_text(
                 "✅ Вы уже общаетесь со специалистом.\n"
-                "Пишите ваши вопросы прямо здесь."
+                "Пишите ваши вопросы прямо здесь.",
+                reply_markup=reply_markup
             )
         return
     
@@ -357,12 +418,18 @@ async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'rating_given': False  # Флаг, что пользователь уже оценил этот чат
     }
     
+    keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+               [KeyboardButton("🆘 Связаться с поддержкой")],
+               [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
     await update.message.reply_text(
         "🆘 *Запрос отправлен!*\n\n"
         "Ваш запрос принят в обработку. Специалист поддержки скоро с вами свяжется.\n"
         "Ожидайте подключения...\n\n"
         "Используйте /status для проверки статуса.",
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=reply_markup
     )
     
     user_info = user_sessions.get(user_id, {})
@@ -530,7 +597,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 # Проверяем, не оценивал ли уже пользователь этот чат
                 if request.get('rating_given', False):
-                    await query.edit_message_text("❌ Вы уже оценили этот чат ранее.")
+                    keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                               [KeyboardButton("🆘 Связаться с поддержкой")],
+                               [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+                    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                    
+                    await query.edit_message_text(
+                        "❌ Вы уже оценили этот чат ранее.",
+                        reply_markup=reply_markup
+                    )
                     return
                 
                 if 'admin_id' in request:
@@ -560,9 +635,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         logger.error(f"Не удалось уведомить администратора об оценке: {e}")
                     
                     # Обновляем сообщение пользователю
+                    keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                               [KeyboardButton("🆘 Связаться с поддержкой")],
+                               [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+                    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                    
                     await query.edit_message_text(
                         f"✅ Спасибо за оценку {rating} ⭐!\n\n"
-                        f"Ваша оценка поможет нам улучшить качество поддержки."
+                        f"Ваша оценка поможет нам улучшить качество поддержки.",
+                        reply_markup=reply_markup
                     )
                     
                     # Закрываем чат после оценки
@@ -575,7 +656,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     return
             
-            await query.edit_message_text("❌ Чат не найден или уже закрыт.")
+            keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                       [KeyboardButton("🆘 Связаться с поддержкой")],
+                       [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            
+            await query.edit_message_text(
+                "❌ Чат не найден или уже закрыт.",
+                reply_markup=reply_markup
+            )
         return
     
     # Обработка управления рассылкой для пользователей
@@ -583,13 +672,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         broadcast_subscribers[user_id] = True
         save_data()
         
+        keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                   [KeyboardButton("🆘 Связаться с поддержкой")],
+                   [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
         await query.edit_message_text(
             "✅ Вы подписались на рассылку!\n\n"
             "Теперь вы будете получать:\n"
             "• Новые промо-коды\n"
             "• Важные объявления\n"
             "• Обновления бота\n"
-            "• Специальные предложения"
+            "• Специальные предложения",
+            reply_markup=reply_markup
         )
         return
     
@@ -597,10 +692,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         broadcast_subscribers[user_id] = False
         save_data()
         
+        keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                   [KeyboardButton("🆘 Связаться с поддержкой")],
+                   [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
         await query.edit_message_text(
             "🔕 Вы отписались от рассылки.\n\n"
             "Вы больше не будете получать уведомления.\n"
-            "Вы можете подписаться снова в любое время."
+            "Вы можете подписаться снова в любое время.",
+            reply_markup=reply_markup
         )
         return
     
@@ -669,12 +770,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             
             try:
+                keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                           [KeyboardButton("🆘 Связаться с поддержкой")],
+                           [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+                reply_markup_user = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                
                 await context.bot.send_message(
                     chat_id=target_user_id,
                     text="✅ *Специалист поддержки подключился к чату!*\n\n"
                          "Теперь вы можете задавать вопросы. Все сообщения будут отправляться специалисту.\n\n"
                          "После решения вопроса специалист завершит чат и вы сможете оценить качество помощи.",
-                    parse_mode=ParseMode.MARKDOWN
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=reply_markup_user
                 )
             except Exception as e:
                 logger.error(f"Не удалось уведомить пользователя: {e}")
@@ -720,12 +827,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         try:
-            # Уведомляем пользователя
+            keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                       [KeyboardButton("🆘 Связаться с поддержкой")],
+                       [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            
             await context.bot.send_message(
                 chat_id=target_user_id,
                 text="❌ Ваш запрос в поддержку был отклонен специалистом.\n\n"
                      "Пожалуйста, попробуйте позже или свяжитесь другим способом.",
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=reply_markup
             )
         except Exception as e:
             logger.error(f"Не удалось уведомить пользователя об отклонении: {e}")
@@ -762,6 +874,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Обновить список администраторов
     elif data == "refresh_admin":
         await admin_command(query, context)
+    
+    # Действия из админ-панели
+    elif data == "show_active":
+        await show_active_requests(query, context)
+    elif data == "show_stats":
+        await stats_command(query, context)
+    elif data == "show_users":
+        await users_command(query, context)
+    elif data == "show_promo":
+        await promo_command(query, context)
+    elif data == "show_broadcast":
+        await broadcast_admin_command(query, context)
+    elif data == "show_ratings":
+        await ratings_command(query, context)
 
 async def broadcast_settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Настройки рассылки для пользователей"""
@@ -801,10 +927,16 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Проверка статуса запроса"""
     user_id = update.effective_user.id
     
+    keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+               [KeyboardButton("🆘 Связаться с поддержкой")],
+               [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
     if user_id not in active_support_requests:
         await update.message.reply_text(
             "📭 У вас нет активных запросов в поддержку.\n"
-            "Используйте кнопку '🆘 Связаться с поддержкой' для создания запроса."
+            "Используйте кнопку '🆘 Связаться с поддержкой' для создания запроса.",
+            reply_markup=reply_markup
         )
         return
     
@@ -834,15 +966,21 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Вы общаетесь со специалистом поддержки."
         )
     
-    await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена запроса в поддержку"""
     user_id = update.effective_user.id
     
+    keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+               [KeyboardButton("🆘 Связаться с поддержкой")],
+               [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
     if user_id not in active_support_requests:
         await update.message.reply_text(
-            "❌ У вас нет активных запросов для отмены."
+            "❌ У вас нет активных запросов для отмены.",
+            reply_markup=reply_markup
         )
         return
     
@@ -872,7 +1010,8 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "✅ Ваш запрос в поддержку отменен.\n\n"
-        "Если у вас возникнут вопросы, вы можете создать новый запрос."
+        "Если у вас возникнут вопросы, вы можете создать новый запрос.",
+        reply_markup=reply_markup
     )
     
     add_notification(f"Пользователь {user_id} отменил запрос в поддержку")
@@ -882,7 +1021,12 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
+        keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                   [KeyboardButton("🆘 Связаться с поддержкой")],
+                   [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text("❌ У вас нет прав доступа.", reply_markup=reply_markup)
         return
     
     keyboard = [
@@ -927,7 +1071,6 @@ async def show_active_requests(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
     waiting_requests = [r for r in active_support_requests.values() if r['status'] == 'waiting']
@@ -1000,7 +1143,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
     # Общая статистика
@@ -1036,7 +1178,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Поддержка
     waiting_requests = len([r for r in active_support_requests.values() if r['status'] == 'waiting'])
     active_chats = len([r for r in active_support_requests.values() if r['status'] == 'active'])
-    completed_chats = len(notifications)  # Примерная метрика
     
     # Рассылка
     subscribed_users = len([v for v in broadcast_subscribers.values() if v])
@@ -1062,8 +1203,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         f"🆘 *Поддержка:*\n"
         f"• Ожидающих запросов: {waiting_requests}\n"
-        f"• Активных чатов: {active_chats}\n"
-        f"• Завершенных чатов: {completed_chats}\n\n"
+        f"• Активных чатов: {active_chats}\n\n"
         
         f"📢 *Рассылка:*\n"
         f"• Подписчиков: {subscribed_users}/{total_users}\n"
@@ -1077,7 +1217,6 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
     if not user_sessions:
@@ -1141,7 +1280,6 @@ async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
     # Проверяем аргументы команды
@@ -1266,7 +1404,6 @@ async def broadcast_admin_command(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
     if context.args:
@@ -1344,7 +1481,6 @@ async def ratings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
     if not admin_ratings:
@@ -1420,7 +1556,12 @@ async def handle_close_command(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
+        keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                   [KeyboardButton("🆘 Связаться с поддержкой")],
+                   [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text("❌ У вас нет прав доступа.", reply_markup=reply_markup)
         return
     
     # Проверяем аргументы
@@ -1550,7 +1691,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Оценка помогает улучшить качество поддержки\n\n"
             "Специалисты подключаются к чату в рабочее время."
         )
-        await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
+        
+        keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                   [KeyboardButton("🆘 Связаться с поддержкой")],
+                   [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     
     # Если пользователь в активном чате с поддержкой
     elif user_id in active_support_requests:
@@ -1582,14 +1729,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     else:
         # Показываем меню
-        keyboard = [
-            [KeyboardButton("🎁 Получить промо-код")],
-            [KeyboardButton("🆘 Связаться с поддержкой")],
-            [KeyboardButton("📢 Управление рассылкой")]
-        ]
+        keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                   [KeyboardButton("🆘 Связаться с поддержкой")],
+                   [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        # Если сообщение не распознано, показываем подсказку
+        hint_text = (
+            "Не понимаю ваше сообщение 😕\n\n"
+            "Пожалуйста, выберите действие из меню ниже или используйте команды:\n"
+            "/start - главное меню\n"
+            "/help - помощь\n"
+            "/status - статус запроса\n"
+            "/cancel - отменить запрос"
+        )
+        
         await update.message.reply_text(
-            "Выберите действие из меню 👇",
+            hint_text,
             reply_markup=reply_markup
         )
     
@@ -1602,8 +1758,14 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if update and update.effective_message:
+            keyboard = [[KeyboardButton("🎁 Получить промо-код")],
+                       [KeyboardButton("🆘 Связаться с поддержкой")],
+                       [KeyboardButton("📢 Управление рассылкой"), KeyboardButton("ℹ️ Информация")]]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            
             await update.effective_message.reply_text(
-                "❌ Произошла ошибка. Пожалуйста, попробуйте еще раз."
+                "❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.",
+                reply_markup=reply_markup
             )
     except:
         pass
@@ -1637,7 +1799,7 @@ def main():
     # Callback-обработчики
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    # Обработчики сообщений
+    # Обработчики сообщений - должен быть последним!
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Обработчик ошибок
