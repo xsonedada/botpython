@@ -47,13 +47,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
-    user_sessions[user_id] = {
+    # Сохраняем информацию о пользователе
+    user_data = {
         'username': user.username,
         'first_name': user.first_name,
         'last_name': user.last_name,
         'last_active': datetime.now(),
-        'promo_used': False
+        'promo_used': False,
+        'registered_at': datetime.now(),
+        'total_messages': 0,
+        'support_requests': 0
     }
+    
+    # Если пользователь уже есть, обновляем только last_active
+    if user_id in user_sessions:
+        user_sessions[user_id]['last_active'] = datetime.now()
+    else:
+        user_sessions[user_id] = user_data
+        logger.info(f"Новый пользователь: {user_id} ({user.username})")
     
     if is_admin(user_id):
         greeting = f"👑 Привет, администратор {user.first_name}!"
@@ -87,6 +98,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/admin - управление поддержкой\n"
             "/active - активные запросы\n"
             "/stats - статистика\n"
+            "/users - просмотр пользователей\n"
             "/promo - управление промо-кодами\n"
             "/help - эта справка\n\n"
             "Как отвечать пользователям:\n"
@@ -112,6 +124,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_promo_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выдача промо-кода"""
     user_id = update.effective_user.id
+    
+    # Обновляем счетчик сообщений
+    if user_id in user_sessions:
+        user_sessions[user_id]['total_messages'] += 1
     
     if is_admin(user_id):
         await update.message.reply_text(
@@ -148,6 +164,8 @@ async def get_promo_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Помечаем, что пользователь использовал промо-код
     if user_id in user_sessions:
         user_sessions[user_id]['promo_used'] = True
+        user_sessions[user_id]['promo_received_at'] = datetime.now()
+        user_sessions[user_id]['promo_code'] = active_promo
     
     await update.message.reply_text(
         f"🎉 *Ваш промо-код:* `{active_promo}`\n\n"
@@ -160,6 +178,11 @@ async def get_promo_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Вызов поддержки"""
     user_id = update.effective_user.id
+    
+    # Обновляем счетчик сообщений и запросов
+    if user_id in user_sessions:
+        user_sessions[user_id]['total_messages'] += 1
+        user_sessions[user_id]['support_requests'] = user_sessions[user_id].get('support_requests', 0) + 1
     
     if is_admin(user_id):
         await update.message.reply_text(
@@ -202,6 +225,7 @@ async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 Пользователь: {user_info.get('first_name', 'Пользователь')}\n"
         f"📛 Username: @{user_info.get('username', 'нет')}\n"
         f"🆔 ID: {user_id}\n"
+        f"📅 Зарегистрирован: {user_info.get('registered_at', datetime.now()).strftime('%Y-%m-%d')}\n"
         f"⏰ Время: {datetime.now().strftime('%H:%M:%S')}\n\n"
         f"Кто примет запрос?"
     )
@@ -247,6 +271,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message_text = update.message.text
     
+    # Обновляем счетчик сообщений для пользователя
+    if user_id in user_sessions:
+        user_sessions[user_id]['total_messages'] += 1
+        user_sessions[user_id]['last_active'] = datetime.now()
+    
     # Обработка команд с подчеркиванием (например, /close_123456789)
     if message_text.startswith('/'):
         if message_text.startswith('/close_'):
@@ -279,6 +308,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     'text': message_text,
                     'admin_id': user_id
                 })
+                
+                # Обновляем счетчик сообщений для пользователя
+                if target_user_id in user_sessions:
+                    user_sessions[target_user_id]['total_messages'] += 1
                 
                 # Подтверждаем отправку администратору
                 await update.message.reply_text(
@@ -618,6 +651,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Управление промо-кодами
     elif data.startswith('promo_'):
         await handle_promo_callback(query, context, data)
+    
+    # Просмотр пользователей
+    elif data.startswith('users_'):
+        await handle_users_callback(query, context, data)
 
 async def update_admin_panel(query, context):
     """Обновление админ панели"""
@@ -655,6 +692,7 @@ async def update_admin_panel(query, context):
         ])
     
     keyboard.extend([
+        [InlineKeyboardButton("👥 Пользователи", callback_data="users_menu")],
         [InlineKeyboardButton("🎁 Промо-коды", callback_data="promo_menu")],
         [InlineKeyboardButton("📊 Вся статистика", callback_data="show_stats")],
         [InlineKeyboardButton("👥 Все активные чаты", callback_data="show_all_active")],
@@ -668,7 +706,8 @@ async def update_admin_panel(query, context):
         f"📈 Ваша статистика:\n"
         f"• 📥 Ожидающих запросов: {waiting_count}\n"
         f"• 💬 Ваших активных чатов: {len(admin_active_chats)}\n"
-        f"• 👥 Всего активных чатов: {active_count}\n\n"
+        f"• 👥 Всего активных чатов: {active_count}\n"
+        f"• 👤 Всего пользователей: {len(user_sessions)}\n\n"
         f"Выберите действие:",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=reply_markup
@@ -816,6 +855,158 @@ async def handle_promo_callback(query, context, data):
         else:
             await query.edit_message_text(f"❌ Промо-код `{code}` не найден.")
 
+async def handle_users_callback(query, context, data):
+    """Обработка пользователей через callback"""
+    user_id = query.from_user.id
+    
+    if data == "users_menu":
+        # Меню пользователей
+        total_users = len(user_sessions)
+        active_today = sum(1 for user in user_sessions.values() 
+                          if (datetime.now() - user.get('last_active', datetime.now())).days == 0)
+        with_promo = sum(1 for user in user_sessions.values() 
+                        if user.get('promo_used', False))
+        
+        keyboard = [
+            [InlineKeyboardButton("📋 Список пользователей", callback_data="users_list")],
+            [InlineKeyboardButton("📊 Статистика пользователей", callback_data="users_stats")],
+            [InlineKeyboardButton("🔍 Поиск пользователя", callback_data="users_search")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="refresh_admin")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"👥 *Управление пользователями*\n\n"
+            f"📊 Статистика:\n"
+            f"• Всего пользователей: {total_users}\n"
+            f"• Активных сегодня: {active_today}\n"
+            f"• Получили промо-код: {with_promo}\n\n"
+            f"Выберите действие:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+    
+    elif data == "users_list":
+        # Список пользователей
+        if not user_sessions:
+            await query.edit_message_text("📭 Нет зарегистрированных пользователей.")
+            return
+        
+        # Сортируем по дате регистрации (новые первые)
+        sorted_users = sorted(user_sessions.items(), 
+                            key=lambda x: x[1].get('registered_at', datetime.min), 
+                            reverse=True)
+        
+        message_text = "📋 *Список пользователей:*\n\n"
+        
+        for user_id, user_data in list(sorted_users)[:15]:  # Показываем первые 15
+            username = user_data.get('username', 'нет')
+            first_name = user_data.get('first_name', 'Неизвестно')
+            last_active = user_data.get('last_active', datetime.now())
+            days_ago = (datetime.now() - last_active).days
+            promo_used = "✅" if user_data.get('promo_used', False) else "❌"
+            reg_date = user_data.get('registered_at', datetime.now()).strftime('%Y-%m-%d')
+            
+            message_text += (
+                f"👤 *{first_name}* (@{username})\n"
+                f"🆔 ID: `{user_id}`\n"
+                f"📅 Зарегистрирован: {reg_date}\n"
+                f"⏰ Был(а): {days_ago} дн. назад\n"
+                f"🎁 Промо-код: {promo_used}\n"
+                f"📨 Сообщений: {user_data.get('total_messages', 0)}\n"
+                f"────────\n"
+            )
+        
+        # Добавляем пагинацию если много пользователей
+        keyboard = []
+        if len(sorted_users) > 15:
+            keyboard.append([InlineKeyboardButton("📄 Следующие 15", callback_data="users_list_2")])
+        
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="users_menu")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            message_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+    
+    elif data == "users_stats":
+        # Статистика пользователей
+        total_users = len(user_sessions)
+        
+        # Подсчет по дням активности
+        today = datetime.now().date()
+        active_today = 0
+        active_week = 0
+        active_month = 0
+        
+        for user_data in user_sessions.values():
+            last_active = user_data.get('last_active', datetime.now()).date()
+            days_diff = (today - last_active).days
+            
+            if days_diff == 0:
+                active_today += 1
+            if days_diff <= 7:
+                active_week += 1
+            if days_diff <= 30:
+                active_month += 1
+        
+        # Пользователи с промо-кодами
+        with_promo = sum(1 for user in user_sessions.values() 
+                        if user.get('promo_used', False))
+        
+        # Среднее количество сообщений
+        total_messages = sum(user.get('total_messages', 0) for user in user_sessions.values())
+        avg_messages = total_messages / total_users if total_users > 0 else 0
+        
+        # Пользователи с запросами в поддержку
+        with_support = sum(1 for user in user_sessions.values() 
+                          if user.get('support_requests', 0) > 0)
+        
+        message_text = (
+            f"📊 *Статистика пользователей*\n\n"
+            f"👥 Всего пользователей: *{total_users}*\n\n"
+            f"📈 Активность:\n"
+            f"• Активных сегодня: {active_today}\n"
+            f"• Активных за неделю: {active_week}\n"
+            f"• Активных за месяц: {active_month}\n\n"
+            f"🎁 Промо-коды:\n"
+            f"• Получили промо-код: {with_promo}\n"
+            f"• Без промо-кода: {total_users - with_promo}\n\n"
+            f"💬 Взаимодействие:\n"
+            f"• Всего сообщений: {total_messages}\n"
+            f"• Среднее на пользователя: {avg_messages:.1f}\n"
+            f"• Обращались в поддержку: {with_support}\n"
+        )
+        
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="users_menu")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            message_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+    
+    elif data == "users_search":
+        # Поиск пользователя
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="users_menu")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "🔍 *Поиск пользователя*\n\n"
+            "Для поиска пользователя используйте команду:\n"
+            "/finduser <id> - найти по ID\n"
+            "/finduser @username - найти по username\n\n"
+            "Пример:\n"
+            "/finduser 123456789\n"
+            "/finduser @username",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Панель администратора"""
     user_id = update.effective_user.id
@@ -856,6 +1047,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
     
     keyboard.extend([
+        [InlineKeyboardButton("👥 Пользователи", callback_data="users_menu")],
         [InlineKeyboardButton("🎁 Промо-коды", callback_data="promo_menu")],
         [InlineKeyboardButton("📊 Вся статистика", callback_data="show_stats")],
         [InlineKeyboardButton("👥 Все активные чаты", callback_data="show_all_active")],
@@ -869,97 +1061,96 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📈 Ваша статистика:\n"
         f"• 📥 Ожидающих запросов: {waiting_count}\n"
         f"• 💬 Ваших активных чатов: {len(admin_active_chats)}\n"
-        f"• 👥 Всего активных чатов: {active_count}\n\n"
+        f"• 👥 Всего активных чатов: {active_count}\n"
+        f"• 👤 Всего пользователей: {len(user_sessions)}\n\n"
         f"Выберите действие:",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=reply_markup
     )
 
-async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Управление промо-кодами (команда)"""
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просмотр пользователей (команда)"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
         await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
-    # Создание промо-кода через команду
     if context.args:
-        if context.args[0] == "create":
-            if len(context.args) >= 2:
-                try:
-                    uses = int(context.args[1])
-                    promo_code = generate_promo_code()
-                    
-                    promo_codes[promo_code] = {
-                        'uses_left': uses,
-                        'total_uses': uses,
-                        'created_at': datetime.now(),
-                        'created_by': user_id,
-                        'used_by': []
-                    }
-                    
-                    await update.message.reply_text(
-                        f"✅ Промо-код создан!\n\n"
-                        f"🎁 Код: `{promo_code}`\n"
-                        f"📊 Использований: {uses}\n"
-                        f"👑 Создал: {update.effective_user.first_name}",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                except ValueError:
-                    await update.message.reply_text(
-                        "❌ Неверное количество использований.\n"
-                        "Пример: /promo create 10"
-                    )
-            else:
-                await update.message.reply_text(
-                    "❌ Укажите количество использований.\n"
-                    "Пример: /promo create 10"
-                )
-        elif context.args[0] == "list":
-            if not promo_codes:
-                await update.message.reply_text("📭 Нет созданных промо-кодов.")
-                return
-            
-            message_text = "📋 *Список промо-кодов:*\n\n"
-            
-            for code, data in promo_codes.items():
-                created_by = data.get('created_by', 'Неизвестно')
-                uses_left = data.get('uses_left', 0)
-                total_uses = data.get('total_uses', 0)
+        # Поиск пользователя
+        search_term = ' '.join(context.args)
+        
+        found_users = []
+        
+        # Ищем по ID
+        if search_term.isdigit():
+            target_id = int(search_term)
+            if target_id in user_sessions:
+                found_users.append((target_id, user_sessions[target_id]))
+        
+        # Ищем по username (без @)
+        else:
+            search_term = search_term.lower().replace('@', '')
+            for uid, user_data in user_sessions.items():
+                username = user_data.get('username', '').lower()
+                first_name = user_data.get('first_name', '').lower()
                 
-                status = "✅ Активен" if uses_left > 0 else "❌ Завершен"
+                if search_term in username or search_term in first_name:
+                    found_users.append((uid, user_data))
+        
+        if found_users:
+            message_text = "🔍 *Результаты поиска:*\n\n"
+            
+            for uid, user_data in found_users[:5]:  # Показываем первые 5
+                username = user_data.get('username', 'нет')
+                first_name = user_data.get('first_name', 'Неизвестно')
+                last_active = user_data.get('last_active', datetime.now())
+                days_ago = (datetime.now() - last_active).days
+                promo_used = "✅" if user_data.get('promo_used', False) else "❌"
+                reg_date = user_data.get('registered_at', datetime.now()).strftime('%Y-%m-%d')
                 
                 message_text += (
-                    f"🎁 `{code}` - {uses_left}/{total_uses} использований ({status})\n"
+                    f"👤 *{first_name}* (@{username})\n"
+                    f"🆔 ID: `{uid}`\n"
+                    f"📅 Зарегистрирован: {reg_date}\n"
+                    f"⏰ Был(а): {days_ago} дн. назад\n"
+                    f"🎁 Промо-код: {promo_used}\n"
+                    f"📨 Сообщений: {user_data.get('total_messages', 0)}\n"
+                    f"🆘 Запросов в поддержку: {user_data.get('support_requests', 0)}\n"
+                    f"────────\n"
                 )
             
+            if len(found_users) > 5:
+                message_text += f"\n*... и еще {len(found_users) - 5} пользователей*"
+            
             await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
-        
-        elif context.args[0] == "delete":
-            if len(context.args) >= 2:
-                code = context.args[1]
-                if code in promo_codes:
-                    del promo_codes[code]
-                    await update.message.reply_text(f"✅ Промо-код `{code}` удален.")
-                else:
-                    await update.message.reply_text(f"❌ Промо-код `{code}` не найден.")
-            else:
-                await update.message.reply_text(
-                    "❌ Укажите промо-код для удаления.\n"
-                    "Пример: /promo delete ABC123"
-                )
+        else:
+            await update.message.reply_text("❌ Пользователи не найдены.")
+    
     else:
-        # Если команда без аргументов, показываем справку
+        # Общая статистика пользователей
+        total_users = len(user_sessions)
+        active_today = sum(1 for user in user_sessions.values() 
+                          if (datetime.now() - user.get('last_active', datetime.now())).days == 0)
+        with_promo = sum(1 for user in user_sessions.values() 
+                        if user.get('promo_used', False))
+        
         await update.message.reply_text(
-            "🎁 *Управление промо-кодами*\n\n"
-            "Команды:\n"
-            "/promo create <количество> - создать промо-код\n"
-            "/promo list - список промо-кодов\n"
-            "/promo delete <код> - удалить промо-код\n\n"
-            "Или используйте /admin для графического интерфейса.",
+            f"👥 *Статистика пользователей*\n\n"
+            f"📊 Основные данные:\n"
+            f"• Всего пользователей: {total_users}\n"
+            f"• Активных сегодня: {active_today}\n"
+            f"• Получили промо-код: {with_promo}\n\n"
+            f"Использование:\n"
+            "/users - эта статистика\n"
+            "/users <id/имя> - поиск пользователя\n"
+            "/admin - графический интерфейс",
             parse_mode=ParseMode.MARKDOWN
         )
+
+async def finduser_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Поиск пользователя (альтернативная команда)"""
+    await users_command(update, context)
 
 async def show_active_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать активные запросы"""
@@ -1104,6 +1295,13 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_promos = sum(1 for promo in promo_codes.values() if promo.get('uses_left', 0) > 0)
     used_promos = sum(promo.get('total_uses', 0) - promo.get('uses_left', 0) for promo in promo_codes.values())
     
+    # Статистика пользователей
+    active_today = sum(1 for user in user_sessions.values() 
+                      if (datetime.now() - user.get('last_active', datetime.now())).days == 0)
+    with_promo = sum(1 for user in user_sessions.values() 
+                    if user.get('promo_used', False))
+    total_messages = sum(user.get('total_messages', 0) for user in user_sessions.values())
+    
     online_admins = 0
     for admin_id in ADMIN_IDS:
         if admin_id in admin_sessions:
@@ -1113,7 +1311,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 *Статистика бота*\n\n"
         f"👥 Пользователи:\n"
         f"• Всего пользователей: {total_users}\n"
-        f"• Активных сейчас: {len(active_support_requests)}\n\n"
+        f"• Активных сегодня: {active_today}\n"
+        f"• Получили промо-код: {with_promo}\n"
+        f"• Всего сообщений: {total_messages}\n\n"
         f"🆘 Поддержка:\n"
         f"• Запросов в ожидании: {waiting_count}\n"
         f"• Активных чатов: {active_count}\n\n"
@@ -1126,6 +1326,92 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Сейчас онлайн: {online_admins}",
         parse_mode=ParseMode.MARKDOWN
     )
+
+async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Управление промо-кодами (команда)"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return
+    
+    # Создание промо-кода через команду
+    if context.args:
+        if context.args[0] == "create":
+            if len(context.args) >= 2:
+                try:
+                    uses = int(context.args[1])
+                    promo_code = generate_promo_code()
+                    
+                    promo_codes[promo_code] = {
+                        'uses_left': uses,
+                        'total_uses': uses,
+                        'created_at': datetime.now(),
+                        'created_by': user_id,
+                        'used_by': []
+                    }
+                    
+                    await update.message.reply_text(
+                        f"✅ Промо-код создан!\n\n"
+                        f"🎁 Код: `{promo_code}`\n"
+                        f"📊 Использований: {uses}\n"
+                        f"👑 Создал: {update.effective_user.first_name}",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except ValueError:
+                    await update.message.reply_text(
+                        "❌ Неверное количество использований.\n"
+                        "Пример: /promo create 10"
+                    )
+            else:
+                await update.message.reply_text(
+                    "❌ Укажите количество использований.\n"
+                    "Пример: /promo create 10"
+                )
+        elif context.args[0] == "list":
+            if not promo_codes:
+                await update.message.reply_text("📭 Нет созданных промо-кодов.")
+                return
+            
+            message_text = "📋 *Список промо-кодов:*\n\n"
+            
+            for code, data in promo_codes.items():
+                created_by = data.get('created_by', 'Неизвестно')
+                uses_left = data.get('uses_left', 0)
+                total_uses = data.get('total_uses', 0)
+                
+                status = "✅ Активен" if uses_left > 0 else "❌ Завершен"
+                
+                message_text += (
+                    f"🎁 `{code}` - {uses_left}/{total_uses} использований ({status})\n"
+                )
+            
+            await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
+        
+        elif context.args[0] == "delete":
+            if len(context.args) >= 2:
+                code = context.args[1]
+                if code in promo_codes:
+                    del promo_codes[code]
+                    await update.message.reply_text(f"✅ Промо-код `{code}` удален.")
+                else:
+                    await update.message.reply_text(f"❌ Промо-код `{code}` не найден.")
+            else:
+                await update.message.reply_text(
+                    "❌ Укажите промо-код для удаления.\n"
+                    "Пример: /promo delete ABC123"
+                )
+    else:
+        # Если команда без аргументов, показываем справку
+        await update.message.reply_text(
+            "🎁 *Управление промо-кодами*\n\n"
+            "Команды:\n"
+            "/promo create <количество> - создать промо-код\n"
+            "/promo list - список промо-кодов\n"
+            "/promo delete <код> - удалить промо-код\n\n"
+            "Или используйте /admin для графического интерфейса.",
+            parse_mode=ParseMode.MARKDOWN
+        )
 
 async def admin_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка сообщений от администраторов"""
@@ -1169,6 +1455,8 @@ def main():
     application.add_handler(CommandHandler("cancel", cancel_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("promo", promo_command))
+    application.add_handler(CommandHandler("users", users_command))
+    application.add_handler(CommandHandler("finduser", finduser_command))
     
     # Отдельный обработчик для команды /close
     application.add_handler(CommandHandler("close", handle_close_command))
@@ -1185,6 +1473,7 @@ def main():
     print("🤖 Бот запущен!")
     print(f"👑 Администраторов: {len(ADMIN_IDS)}")
     print("🎁 Система промо-кодов активирована")
+    print("👥 Система пользователей активирована")
     print("Ожидание сообщений...")
     
     application.run_polling()
