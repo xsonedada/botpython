@@ -487,10 +487,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 # Проверяем, не оценивал ли уже пользователь этот чат
                 if request.get('rating_given', False):
-                    await query.edit_message_text(
-                        "❌ Вы уже оценили этот чат ранее.",
-                        reply_markup=reply_markup
-                    )
+                    try:
+                        await query.edit_message_text("❌ Вы уже оценили этот чат ранее.")
+                    except Exception as e:
+                        logger.error(f"Не удалось отредактировать сообщение с оценкой: {e}")
+                        await context.bot.send_message(chat_id=user_id, text="❌ Вы уже оценили этот чат ранее.")
                     return
                 
                 if 'admin_id' in request:
@@ -519,12 +520,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         logger.error(f"Не удалось уведомить администратора об оценке: {e}")
                     
-                    # Обновляем сообщение пользователю
-                    await query.edit_message_text(
-                        f"✅ Спасибо за оценку {rating} ⭐!\n\n"
-                        f"Ваша оценка поможет нам улучшить качество поддержки.",
-                        reply_markup=reply_markup
-                    )
+                    # Пытаемся отредактировать сообщение с оценкой
+                    try:
+                        await query.edit_message_text(
+                            f"✅ Спасибо за оценку {rating} ⭐!\n\n"
+                            f"Ваша оценка поможет нам улучшить качество поддержки."
+                        )
+                    except Exception as e:
+                        logger.error(f"Не удалось отредактировать сообщение с оценкой: {e}")
+                        # Отправляем новое сообщение
+                        await context.bot.send_message(
+                            chat_id=user_id,
+                            text=f"✅ Спасибо за оценку {rating} ⭐!\n\n"
+                                 f"Ваша оценка поможет нам улучшить качество поддержки."
+                        )
                     
                     # Закрываем чат после оценки
                     if target_user_id in active_support_requests:
@@ -536,10 +545,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     return
             
-            await query.edit_message_text(
-                "❌ Чат не найден или уже закрыт.",
-                reply_markup=reply_markup
-            )
+            # Если чат не найден, пытаемся отредактировать сообщение или отправить новое
+            try:
+                await query.edit_message_text("❌ Чат не найден или уже закрыт.")
+            except Exception as e:
+                logger.error(f"Не удалось отредактировать сообщение: {e}")
+                await context.bot.send_message(chat_id=user_id, text="❌ Чат не найден или уже закрыт.")
         return
     
     # Обработка управления рассылкой для пользователей
@@ -766,21 +777,488 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         add_notification(f"Администратор {user_id} отклонил запрос от пользователя {target_user_id}")
     
-    # Действия из админ-панели
+    # Действия из админ-панели - исправленная версия
     elif data == "show_active":
-        await show_active_requests(query, context)
+        # Показываем активные запросы прямо здесь
+        await show_active_requests_callback(query, context)
     elif data == "show_stats":
-        await stats_command(query, context)
+        # Показываем статистику прямо здесь
+        await stats_command_callback(query, context)
     elif data == "show_users":
-        await users_command(query, context)
+        # Показываем пользователей
+        await users_command_callback(query, context)
     elif data == "show_promo":
-        await promo_command(query, context)
+        # Показываем промо-коды
+        await promo_command_callback(query, context)
     elif data == "show_broadcast":
-        await broadcast_admin_command(query, context)
+        # Показываем управление рассылкой
+        await broadcast_admin_command_callback(query, context)
     elif data == "show_ratings":
-        await ratings_command(query, context)
+        # Показываем рейтинги
+        await ratings_command_callback(query, context)
     elif data == "refresh_admin":
-        await admin_command(query, context)
+        # Обновляем админ-панель
+        await admin_command_callback(query, context)
+
+async def show_active_requests_callback(query, context):
+    """Показать активные запросы для callback"""
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    waiting_requests = [r for r in active_support_requests.values() if r['status'] == 'waiting']
+    active_chats = [r for r in active_support_requests.values() if r['status'] == 'active']
+    
+    if not waiting_requests and not active_chats:
+        await query.edit_message_text(
+            "📭 Нет активных запросов или чатов в поддержке."
+        )
+        return
+    
+    message_lines = ["🆘 *Активные запросы в поддержку:*\n\n"]
+    
+    if waiting_requests:
+        message_lines.append("*📋 Ожидающие запросы:*")
+        for i, (uid, request) in enumerate([(k, v) for k, v in active_support_requests.items() if v['status'] == 'waiting'], 1):
+            user_info = request['user_info']
+            wait_time = datetime.now() - request['created_at']
+            minutes = int(wait_time.total_seconds() // 60)
+            
+            message_lines.extend([
+                f"{i}. 👤 *{user_info.get('first_name', 'Пользователь')}*",
+                f"   🆔 ID: {uid}",
+                f"   📛 @{user_info.get('username', 'нет')}",
+                f"   ⏱️ Ожидает: {minutes} мин.",
+                f"   ────────"
+            ])
+    
+    if active_chats:
+        message_lines.append("\n*💬 Активные чаты:*")
+        for i, (uid, request) in enumerate([(k, v) for k, v in active_support_requests.items() if v['status'] == 'active'], 1):
+            user_info = request['user_info']
+            admin_id = request.get('admin_id')
+            admin_info = admin_sessions.get(admin_id, {}) if admin_id else {}
+            admin_name = admin_info.get('first_name', f'Админ {admin_id}') if admin_id else 'Неизвестно'
+            
+            active_time = datetime.now() - request.get('admin_accepted_at', request['created_at'])
+            minutes = int(active_time.total_seconds() // 60)
+            
+            message_lines.extend([
+                f"{i}. 👤 *{user_info.get('first_name', 'Пользователь')}*",
+                f"   🆔 ID: {uid}",
+                f"   👨‍💻 Специалист: {admin_name}",
+                f"   ⏱️ В работе: {minutes} мин.",
+                f"   ────────"
+            ])
+    
+    message_text = "\n".join(message_lines)
+    
+    # Добавляем кнопки управления
+    inline_keyboard = []
+    for uid, request in active_support_requests.items():
+        if request['status'] == 'waiting':
+            user_info = request['user_info']
+            inline_keyboard.append([
+                InlineKeyboardButton(
+                    f"✅ Принять {user_info.get('first_name', f'ID {uid}')}",
+                    callback_data=f"accept_{uid}_{user_id}"
+                )
+            ])
+    
+    # Кнопка возврата
+    inline_keyboard.append([
+        InlineKeyboardButton("🔙 Назад", callback_data="refresh_admin")
+    ])
+    
+    if inline_keyboard:
+        inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
+        await query.edit_message_text(
+            message_text, 
+            parse_mode=ParseMode.MARKDOWN, 
+            reply_markup=inline_reply_markup
+        )
+    else:
+        inline_keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="refresh_admin")]]
+        inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
+        await query.edit_message_text(
+            message_text, 
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=inline_reply_markup
+        )
+
+async def stats_command_callback(query, context):
+    """Статистика бота для callback"""
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    # Общая статистика
+    total_users = len(user_sessions)
+    total_messages = sum(user.get('total_messages', 0) for user in user_sessions.values())
+    total_support_requests = sum(user.get('support_requests', 0) for user in user_sessions.values())
+    total_promo_received = sum(user.get('promo_received', 0) for user in user_sessions.values())
+    
+    # Статистика по датам
+    today = datetime.now().date()
+    week_ago = today - timedelta(days=7)
+    
+    new_users_today = len([
+        user for user_id, user in user_sessions.items()
+        if user.get('registered_at', datetime.now()).date() == today
+    ])
+    
+    new_users_week = len([
+        user for user_id, user in user_sessions.items()
+        if user.get('registered_at', datetime.now()).date() >= week_ago
+    ])
+    
+    # Активные пользователи
+    active_today = len([
+        user_id for user_id, user in user_sessions.items()
+        if user.get('last_active', datetime.now()).date() == today
+    ])
+    
+    # Промо-коды
+    active_promo = len([code for code, data in promo_codes.items() if data.get('uses_left', 0) > 0])
+    used_promo = len([code for code, data in promo_codes.items() if data.get('uses_left', 0) <= 0])
+    
+    # Поддержка
+    waiting_requests = len([r for r in active_support_requests.values() if r['status'] == 'waiting'])
+    active_chats = len([r for r in active_support_requests.values() if r['status'] == 'active'])
+    
+    # Рассылка
+    subscribed_users = len([v for v in broadcast_subscribers.values() if v])
+    
+    stats_text = (
+        f"📊 *Статистика бота*\n\n"
+        
+        f"👥 *Пользователи:*\n"
+        f"• Всего пользователей: {total_users}\n"
+        f"• Новых сегодня: {new_users_today}\n"
+        f"• Новых за неделю: {new_users_week}\n"
+        f"• Активных сегодня: {active_today}\n\n"
+        
+        f"📨 *Активность:*\n"
+        f"• Всего сообщений: {total_messages}\n"
+        f"• Запросов в поддержку: {total_support_requests}\n"
+        f"• Получено промо-кодов: {total_promo_received}\n\n"
+        
+        f"🎁 *Промо-коды:*\n"
+        f"• Всего промо-кодов: {len(promo_codes)}\n"
+        f"• Активных: {active_promo}\n"
+        f"• Использованных: {used_promo}\n\n"
+        
+        f"🆘 *Поддержка:*\n"
+        f"• Ожидающих запросов: {waiting_requests}\n"
+        f"• Активных чатов: {active_chats}\n\n"
+        
+        f"📢 *Рассылка:*\n"
+        f"• Подписчиков: {subscribed_users}/{total_users}\n"
+        f"• Охват: {subscribed_users/total_users*100:.1f}%"
+    )
+    
+    # Кнопка возврата
+    inline_keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="refresh_admin")]]
+    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
+    
+    await query.edit_message_text(
+        stats_text, 
+        parse_mode=ParseMode.MARKDOWN, 
+        reply_markup=inline_reply_markup
+    )
+
+async def users_command_callback(query, context):
+    """Просмотр пользователей для callback"""
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if not user_sessions:
+        await query.edit_message_text("📭 Нет зарегистрированных пользователей.")
+        return
+    
+    # Сортируем пользователей по дате регистрации
+    sorted_users = sorted(
+        user_sessions.items(),
+        key=lambda x: x[1].get('registered_at', datetime.now()),
+        reverse=True
+    )
+    
+    message_lines = ["👥 *Список пользователей:*\n\n"]
+    
+    for i, (uid, user_data) in enumerate(sorted_users[:20], 1):  # Показываем первые 20
+        username = user_data.get('username', 'нет')
+        first_name = user_data.get('first_name', 'Пользователь')
+        last_name = user_data.get('last_name', '')
+        registered = user_data.get('registered_at', datetime.now())
+        last_active = user_data.get('last_active', datetime.now())
+        
+        # Рассчитываем активность
+        days_since_active = (datetime.now() - last_active).days
+        activity_status = "🟢" if days_since_active == 0 else "🟡" if days_since_active <= 7 else "🔴"
+        
+        # Статистика пользователя
+        total_messages = user_data.get('total_messages', 0)
+        support_requests = user_data.get('support_requests', 0)
+        promo_received = user_data.get('promo_received', 0)
+        
+        message_lines.extend([
+            f"{i}. {activity_status} *{first_name}* {last_name}",
+            f"   📛 @{username}",
+            f"   🆔 ID: {uid}",
+            f"   📅 Регистрация: {registered.strftime('%Y-%m-%d')}",
+            f"   📝 Сообщений: {total_messages}",
+            f"   🆘 Запросов: {support_requests}",
+            f"   🎁 Промо-кодов: {promo_received}",
+            f"   ────────"
+        ])
+    
+    if len(sorted_users) > 20:
+        message_lines.append(f"\n... и еще {len(sorted_users) - 20} пользователей")
+    
+    message_text = "\n".join(message_lines)
+    
+    # Кнопки для управления
+    inline_keyboard = [
+        [InlineKeyboardButton("🔙 Назад", callback_data="refresh_admin")]
+    ]
+    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
+    
+    await query.edit_message_text(
+        message_text, 
+        parse_mode=ParseMode.MARKDOWN, 
+        reply_markup=inline_reply_markup
+    )
+
+async def promo_command_callback(query, context):
+    """Управление промо-кодами для callback"""
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    # Показываем список промо-кодов
+    if not promo_codes:
+        message_text = (
+            "📭 Нет созданных промо-кодов.\n\n"
+            "Доступные команды:\n"
+            "• /promo create <количество> - создать новый промо-код\n"
+            "• /promo delete <код> - удалить промо-код"
+        )
+    else:
+        message_lines = ["🎁 *Список промо-кодов:*\n\n"]
+        
+        for i, (code, data) in enumerate(promo_codes.items(), 1):
+            uses_left = data.get('uses_left', 0)
+            total_uses = data.get('total_uses', 0)
+            created_at = data.get('created_at', datetime.now())
+            created_by = data.get('created_by', 'Неизвестно')
+            
+            if isinstance(created_at, str):
+                try:
+                    created_at = datetime.fromisoformat(created_at)
+                except:
+                    created_at = datetime.now()
+            
+            status = "🟢 Активен" if uses_left > 0 else "🔴 Использован"
+            used_by = data.get('used_by', [])
+            
+            message_lines.extend([
+                f"{i}. {status} - `{code}`",
+                f"   📊 {uses_left}/{total_uses} использований",
+                f"   📅 Создан: {created_at.strftime('%Y-%m-%d')}",
+                f"   👤 Создал: {created_by}",
+                f"   👥 Использовали: {len(used_by)} пользователей",
+                f"   ────────"
+            ])
+        
+        message_text = "\n".join(message_lines)
+    
+    # Кнопки для управления
+    inline_keyboard = [
+        [
+            InlineKeyboardButton("➕ Создать промо-код", callback_data="promo_create"),
+            InlineKeyboardButton("🗑️ Удалить промо-код", callback_data="promo_delete")
+        ],
+        [
+            InlineKeyboardButton("🔙 Назад", callback_data="refresh_admin")
+        ]
+    ]
+    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
+    
+    await query.edit_message_text(
+        message_text, 
+        parse_mode=ParseMode.MARKDOWN, 
+        reply_markup=inline_reply_markup
+    )
+
+async def broadcast_admin_command_callback(query, context):
+    """Управление рассылкой для администраторов для callback"""
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    # Показываем статистику рассылки
+    total_users = len(broadcast_subscribers)
+    subscribed = len([v for v in broadcast_subscribers.values() if v])
+    unsubscribed = total_users - subscribed
+    
+    stats_text = (
+        f"📢 *Управление рассылкой*\n\n"
+        f"📊 *Статистика:*\n"
+        f"• Всего пользователей: {total_users}\n"
+        f"• Подписано: {subscribed}\n"
+        f"• Отписано: {unsubscribed}\n"
+        f"• Охват: {subscribed/total_users*100:.1f}%\n\n"
+        f"Для отправки рассылки используйте:\n"
+        f"/broadcastadmin <текст сообщения>"
+    )
+    
+    inline_keyboard = [
+        [
+            InlineKeyboardButton("📝 Отправить рассылку", callback_data="send_broadcast"),
+            InlineKeyboardButton("📊 Статистика", callback_data="broadcast_stats")
+        ],
+        [
+            InlineKeyboardButton("🔙 Назад", callback_data="refresh_admin")
+        ]
+    ]
+    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
+    
+    await query.edit_message_text(
+        stats_text, 
+        parse_mode=ParseMode.MARKDOWN, 
+        reply_markup=inline_reply_markup
+    )
+
+async def ratings_command_callback(query, context):
+    """Просмотр рейтингов администраторов для callback"""
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if not admin_ratings:
+        await query.edit_message_text(
+            "📭 Рейтингов пока нет.\n\n"
+            "Рейтинги появятся после того, как пользователи оценят работу администраторов."
+        )
+        return
+    
+    # Сортируем администраторов по рейтингу (от высшего к низшему)
+    sorted_admins = sorted(
+        admin_ratings.items(),
+        key=lambda x: x[1].get('avg_rating', 0),
+        reverse=True
+    )
+    
+    message_lines = ["🏆 *Рейтинги администраторов:*\n\n"]
+    
+    for i, (admin_id, rating_data) in enumerate(sorted_admins, 1):
+        admin_info = admin_sessions.get(admin_id, {})
+        admin_name = admin_info.get('first_name', f'Админ {admin_id}')
+        username = admin_info.get('username', 'нет')
+        
+        avg_rating = rating_data.get('avg_rating', 0)
+        total_reviews = rating_data.get('total_reviews', 0)
+        last_updated = rating_data.get('last_updated', datetime.now())
+        
+        # Формируем звезды для визуализации
+        stars = "⭐" * int(avg_rating)
+        if avg_rating % 1 >= 0.5:
+            stars += "✨"
+        
+        # Рассчитываем сколько дней назад было обновление
+        if isinstance(last_updated, datetime):
+            days_ago = (datetime.now() - last_updated).days
+        else:
+            try:
+                days_ago = (datetime.now() - datetime.fromisoformat(last_updated)).days
+            except:
+                days_ago = 0
+        
+        message_lines.extend([
+            f"{i}. *{admin_name}* (@{username})",
+            f"   Рейтинг: {avg_rating:.1f}/5 {stars}",
+            f"   Отзывов: {total_reviews}",
+            f"   Последняя оценка: {days_ago} дн. назад",
+            f"   ID: {admin_id}",
+            f"   ────────"
+        ])
+    
+    message_text = "\n".join(message_lines)
+    
+    # Статистика
+    total_admins = len(admin_ratings)
+    avg_all_rating = sum(r['avg_rating'] for r in admin_ratings.values()) / total_admins if total_admins > 0 else 0
+    total_reviews = sum(r['total_reviews'] for r in admin_ratings.values())
+    
+    stats_text = (
+        f"\n📊 *Статистика:*\n"
+        f"• Всего администраторов с рейтингом: {total_admins}\n"
+        f"• Средний рейтинг: {avg_all_rating:.1f}/5\n"
+        f"• Всего оценок: {total_reviews}\n"
+        f"• Администраторов без оценок: {len(ADMIN_IDS) - total_admins}"
+    )
+    
+    # Кнопка возврата
+    inline_keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="refresh_admin")]]
+    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
+    
+    await query.edit_message_text(
+        message_text + stats_text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=inline_reply_markup
+    )
+
+async def admin_command_callback(query, context):
+    """Панель администратора для callback"""
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    inline_keyboard = [
+        [
+            InlineKeyboardButton("📋 Активные запросы", callback_data="show_active"),
+            InlineKeyboardButton("📊 Статистика", callback_data="show_stats")
+        ],
+        [
+            InlineKeyboardButton("👥 Пользователи", callback_data="show_users"),
+            InlineKeyboardButton("🎁 Промо-коды", callback_data="show_promo")
+        ],
+        [
+            InlineKeyboardButton("📢 Управление рассылкой", callback_data="show_broadcast"),
+            InlineKeyboardButton("⭐ Рейтинги", callback_data="show_ratings")
+        ]
+    ]
+    
+    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
+    
+    # Статистика
+    active_requests = len([r for r in active_support_requests.values() if r['status'] == 'waiting'])
+    active_chats = len([r for r in active_support_requests.values() if r['status'] == 'active'])
+    
+    admin_text = (
+        f"👑 *Панель администратора*\n\n"
+        f"📊 *Краткая статистика:*\n"
+        f"• 👥 Пользователей: {len(user_sessions)}\n"
+        f"• 🆘 Ожидающих запросов: {active_requests}\n"
+        f"• 💬 Активных чатов: {active_chats}\n"
+        f"• 🎁 Промо-кодов: {len(promo_codes)}\n"
+        f"• 📢 Подписчиков: {len([v for v in broadcast_subscribers.values() if v])}\n\n"
+        f"Выберите раздел для управления:"
+    )
+    
+    await query.edit_message_text(
+        admin_text, 
+        parse_mode=ParseMode.MARKDOWN, 
+        reply_markup=inline_reply_markup
+    )
 
 async def broadcast_settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Настройки рассылки для пользователей"""
@@ -935,9 +1413,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [
             InlineKeyboardButton("📢 Управление рассылкой", callback_data="show_broadcast"),
             InlineKeyboardButton("⭐ Рейтинги", callback_data="show_ratings")
-        ],
-        [
-            InlineKeyboardButton("🔄 Обновить", callback_data="refresh_admin")
         ]
     ]
     
@@ -965,7 +1440,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def show_active_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать активные запросы"""
+    """Показать активные запросы (команда /active)"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1018,26 +1493,10 @@ async def show_active_requests(update: Update, context: ContextTypes.DEFAULT_TYP
     
     message_text = "\n".join(message_lines)
     
-    # Добавляем кнопки управления
-    inline_keyboard = []
-    for uid, request in active_support_requests.items():
-        if request['status'] == 'waiting':
-            user_info = request['user_info']
-            inline_keyboard.append([
-                InlineKeyboardButton(
-                    f"✅ Принять {user_info.get('first_name', f'ID {uid}')}",
-                    callback_data=f"accept_{uid}_{user_id}"
-                )
-            ])
-    
-    if inline_keyboard:
-        inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
-        await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN, reply_markup=inline_reply_markup)
-    else:
-        await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Статистика бота"""
+    """Статистика бота (команда /stats)"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1111,7 +1570,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
 
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Просмотр пользователей"""
+    """Просмотр пользователей (команда /users)"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1162,19 +1621,10 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message_text = "\n".join(message_lines)
     
-    # Кнопки для управления
-    inline_keyboard = [
-        [
-            InlineKeyboardButton("🔄 Обновить", callback_data="refresh_admin"),
-            InlineKeyboardButton("📋 Экспорт", callback_data="export_users")
-        ]
-    ]
-    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
-    
-    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN, reply_markup=inline_reply_markup)
+    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
 
 async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Управление промо-кодами"""
+    """Управление промо-кодами (команда /promo)"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1284,21 +1734,10 @@ async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message_text = "\n".join(message_lines)
     
-    inline_keyboard = [
-        [
-            InlineKeyboardButton("➕ Создать промо-код", callback_data="promo_create"),
-            InlineKeyboardButton("🗑️ Удалить промо-код", callback_data="promo_delete")
-        ],
-        [
-            InlineKeyboardButton("🔄 Обновить", callback_data="refresh_admin")
-        ]
-    ]
-    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
-    
-    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN, reply_markup=inline_reply_markup)
+    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
 
 async def broadcast_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Управление рассылкой для администраторов"""
+    """Управление рассылкой для администраторов (команда /broadcastadmin)"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1364,18 +1803,10 @@ async def broadcast_admin_command(update: Update, context: ContextTypes.DEFAULT_
         f"/broadcastadmin <текст сообщения>"
     )
     
-    inline_keyboard = [
-        [
-            InlineKeyboardButton("📝 Отправить рассылку", callback_data="send_broadcast"),
-            InlineKeyboardButton("📊 Статистика", callback_data="broadcast_stats")
-        ]
-    ]
-    inline_reply_markup = InlineKeyboardMarkup(inline_keyboard)
-    
-    await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN, reply_markup=inline_reply_markup)
+    await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
 
 async def ratings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Просмотр рейтингов администраторов"""
+    """Просмотр рейтингов администраторов (команда /ratings)"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
