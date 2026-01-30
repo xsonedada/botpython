@@ -13,6 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.enums import ParseMode
 import asyncio
+from aiogram.types import FSInputFile
 
 # Конфигурация
 BOT_TOKEN = "8213844298:AAHbMtsO6WBT7nzfd7DkwMRLmSBJzruk-3E"
@@ -495,8 +496,8 @@ async def broadcast_settings_handler(message: Message):
     await message.answer(message_text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
 @router.message(F.text == "ℹ️ Информация")
-async def info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Информация о боте с фото"""
+async def info_handler(message: Message):
+    """Информация о боте"""
     info_text = (
         "🤖 *Информация о боте*\n\n"
         "Этот бот предоставляет:\n"
@@ -514,22 +515,23 @@ async def info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-            # Если у вас есть файл bot_info.jpg в директории
-            with open('bot_info.png', 'rb') as photo:
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=info_text,
-                    parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=ReplyKeyboardMarkup(get_main_keyboard(), resize_keyboard=True)
-                )
-        except (FileNotFoundError, Exception) as e2:
-            logger.error(f"Не удалось отправить фото из файла: {e2}")
-            # Вариант 3: Если нет фото, отправляем просто текст
-            await update.message.reply_text(
-                info_text,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=ReplyKeyboardMarkup(get_main_keyboard(), resize_keyboard=True)
-            )
+        # Используйте локальный файл вместо URL
+        photo = FSInputFile("bot_info.png")  # Укажите путь к вашему фото
+        
+        await message.answer_photo(
+            photo=photo,
+            caption=info_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_main_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки фото: {e}")
+        # Если не удалось отправить фото, отправляем только текст
+        await message.answer(
+            info_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_main_keyboard()
+        )
     
     await message.answer(info_text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
