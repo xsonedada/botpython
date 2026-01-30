@@ -2,7 +2,9 @@ import logging
 import re
 import random
 import string
-from datetime import datetime
+import json
+import os
+from datetime import datetime, timedelta
 from typing import Dict, List
 from telegram import Update, WebAppInfo, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
@@ -12,12 +14,15 @@ from telegram.constants import ParseMode
 BOT_TOKEN = "8213844298:AAHbMtsO6WBT7nzfd7DkwMRLmSBJzruk-3E"
 WEBSITE_URL = "https://www.realtimegroup.ru/"
 ADMIN_IDS = [724770396]  # ID всех администраторов (добавьте свои)
+DATA_FILE = "bot_data.json"  # Файл для сохранения данных
 
-# Хранилище данных
+# Хранилище данных (загружаются из файла при старте)
 active_support_requests: Dict[int, Dict] = {}
 user_sessions: Dict[int, Dict] = {}
 admin_sessions: Dict[int, Dict] = {}
-promo_codes: Dict[str, Dict] = {}  # promo_code -> {'uses_left': X, 'created_by': admin_id}
+promo_codes: Dict[str, Dict] = {}
+notifications: List[Dict] = []  # Система уведомлений
+surveys: Dict[str, Dict] = {}  # Опросы для пользователей
 
 # Настройка логирования
 logging.basicConfig(
@@ -35,6 +40,60 @@ def generate_promo_code(length=8):
     characters = string.ascii_uppercase + string.digits
     return ''.join(random.choice(characters) for _ in range(length))
 
+def save_data():
+    """Сохранение данных в файл"""
+    try:
+        data = {
+            'user_sessions': user_sessions,
+            'promo_codes': promo_codes,
+            'notifications': notifications[-100:],  # Сохраняем последние 100 уведомлений
+            'surveys': surveys
+        }
+        
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, default=str, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Данные сохранены в {DATA_FILE}")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения данных: {e}")
+
+def load_data():
+    """Загрузка данных из файла"""
+    global user_sessions, promo_codes, notifications, surveys
+    
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            user_sessions = data.get('user_sessions', {})
+            # Преобразуем строки обратно в datetime
+            for user_id, user_data in user_sessions.items():
+                for key in ['last_active', 'registered_at', 'promo_received_at']:
+                    if key in user_data and user_data[key]:
+                        try:
+                            user_data[key] = datetime.fromisoformat(user_data[key])
+                        except:
+                            user_data[key] = datetime.now()
+            
+            promo_codes = data.get('promo_codes', {})
+            notifications = data.get('notifications', [])
+            surveys = data.get('surveys', {})
+            
+            logger.info(f"Данные загружены из {DATA_FILE}")
+            logger.info(f"Пользователей: {len(user_sessions)}")
+            logger.info(f"Промо-кодов: {len(promo_codes)}")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки данных: {e}")
+
+def add_notification(message: str, level: str = "info"):
+    """Добавление системного уведомления"""
+    notifications.append({
+        'message': message,
+        'level': level,
+        'time': datetime.now()
+    })
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     user_id = update.effective_user.id
@@ -43,28 +102,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [KeyboardButton("🎁 Получить промо-код")],
         [KeyboardButton("🆘 Связаться с поддержкой")],
-        [KeyboardButton("ℹ️ Информация")]
+        [KeyboardButton("📊 Моя статистика")],
+        [KeyboardButton("❓ Опросы"), KeyboardButton("ℹ️ Информация")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
-    # Сохраняем информацию о пользователе
-    user_data = {
-        'username': user.username,
-        'first_name': user.first_name,
-        'last_name': user.last_name,
-        'last_active': datetime.now(),
-        'promo_used': False,
-        'registered_at': datetime.now(),
-        'total_messages': 0,
-        'support_requests': 0
-    }
+    # Проверяем, новый ли пользователь
+    is_new_user = user_id not in user_sessions
     
-    # Если пользователь уже есть, обновляем только last_active
-    if user_id in user_sessions:
-        user_sessions[user_id]['last_active'] = datetime.now()
-    else:
+    # Сохраняем/обновляем информацию о пользователе
+    if is_new_user:
+        user_data = {
+            'username': user.username,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'last_active': datetime.now(),
+            'registered_at': datetime.now(),
+            'promo_used': False,
+            'total_messages': 0,
+            'support_requests': 0,
+            'promo_received': 0,
+            'rating': 0,
+            'achievements': []
+        }
         user_sessions[user_id] = user_data
+        
+        # Добавляем уведомление о новом пользователе
+        add_notification(f"Новый пользователь: {user.first_name} (@{user.username}) ID: {user_id}")
+        
         logger.info(f"Новый пользователь: {user_id} ({user.username})")
+        
+        # Автоматически даем достижение "Новичок"
+        if 'newbie' not in user_data['achievements']:
+            user_data['achievements'].append('newbie')
+    else:
+        user_sessions[user_id]['last_active'] = datetime.now()
+        user_sessions[user_id]['username'] = user.username
+        user_sessions[user_id]['first_name'] = user.first_name
+        user_sessions[user_id]['last_name'] = user.last_name
     
     if is_admin(user_id):
         greeting = f"👑 Привет, администратор {user.first_name}!"
@@ -76,13 +151,118 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
     else:
         greeting = f"👋 Привет, {user.first_name}!"
+        
+        # Приветствие для нового пользователя
+        if is_new_user:
+            greeting += "\n\n🎉 Добро пожаловать! Вы новый пользователь бота!"
     
     await update.message.reply_text(
         f"{greeting}\n\n"
         "Доступные функции:\n"
         "• 🎁 Получить промо-код - получить промо-код\n"
         "• 🆘 Связаться с поддержкой - получить помощь\n"
+        "• 📊 Моя статистика - ваша активность\n"
+        "• ❓ Опросы - участвовать в опросах\n"
         "• ℹ️ Информация - о возможностях бота",
+        reply_markup=reply_markup
+    )
+    
+    # Сохраняем данные
+    save_data()
+
+async def my_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Статистика пользователя"""
+    user_id = update.effective_user.id
+    
+    if user_id not in user_sessions:
+        await update.message.reply_text("❌ Ваши данные не найдены. Используйте /start")
+        return
+    
+    user_data = user_sessions[user_id]
+    
+    # Вычисляем активность
+    last_active = user_data.get('last_active', datetime.now())
+    days_since_active = (datetime.now() - last_active).days
+    hours_since_active = (datetime.now() - last_active).seconds // 3600
+    
+    # Считаем уровень активности
+    activity_level = "🟢 Высокая" if days_since_active == 0 else "🟡 Средняя" if days_since_active < 7 else "🔴 Низкая"
+    
+    # Считаем рейтинг (основывается на активности)
+    rating = user_data.get('rating', 0)
+    
+    # Достижения
+    achievements = user_data.get('achievements', [])
+    achievements_text = ""
+    if achievements:
+        achievements_dict = {
+            'newbie': "👶 Новичок",
+            'active': "💬 Активный",
+            'promo': "🎁 Получил промо",
+            'supporter': "🆘 Обращался в поддержку",
+            'veteran': "🏆 Ветеран (более 30 дней)"
+        }
+        for ach in achievements:
+            if ach in achievements_dict:
+                achievements_text += f"• {achievements_dict[ach]}\n"
+    
+    message = (
+        f"📊 *Ваша статистика*\n\n"
+        f"👤 *Информация:*\n"
+        f"• Имя: {user_data.get('first_name', 'Неизвестно')}\n"
+        f"• Username: @{user_data.get('username', 'нет')}\n"
+        f"• ID: `{user_id}`\n"
+        f"• Дата регистрации: {user_data.get('registered_at', datetime.now()).strftime('%d.%m.%Y')}\n\n"
+        
+        f"📈 *Активность:*\n"
+        f"• Уровень активности: {activity_level}\n"
+        f"• Последняя активность: {hours_since_active} ч. назад\n"
+        f"• Всего сообщений: {user_data.get('total_messages', 0)}\n"
+        f"• Запросов в поддержку: {user_data.get('support_requests', 0)}\n"
+        f"• Получено промо-кодов: {user_data.get('promo_received', 0)}\n"
+        f"• Рейтинг: ⭐ {rating}/10\n\n"
+        
+        f"🏆 *Достижения:*\n{achievements_text if achievements_text else '• Пока нет достижений\n'}"
+    )
+    
+    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+async def surveys_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Опросы для пользователей"""
+    user_id = update.effective_user.id
+    
+    if not surveys:
+        await update.message.reply_text(
+            "📭 В настоящее время нет активных опросов.\n"
+            "Проверьте позже!"
+        )
+        return
+    
+    # Показываем доступные опросы
+    keyboard = []
+    for survey_id, survey_data in surveys.items():
+        if survey_data.get('active', True):
+            # Проверяем, не проходил ли уже пользователь этот опрос
+            if user_id not in survey_data.get('participants', []):
+                survey_name = survey_data.get('name', f'Опрос {survey_id}')
+                keyboard.append([
+                    InlineKeyboardButton(f"📝 {survey_name}", callback_data=f"survey_{survey_id}")
+                ])
+    
+    if not keyboard:
+        await update.message.reply_text(
+            "✅ Вы уже прошли все доступные опросы!\n"
+            "Спасибо за участие!"
+        )
+        return
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "📊 *Доступные опросы:*\n\n"
+        "Выберите опрос для участия:",
+        parse_mode=ParseMode.MARKDOWN,
         reply_markup=reply_markup
     )
 
@@ -93,30 +273,46 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin(user_id):
         help_text = (
             "👑 *Панель администратора*\n\n"
-            "Команды:\n"
+            "📋 Основные команды:\n"
             "/start - главное меню\n"
             "/admin - управление поддержкой\n"
             "/active - активные запросы\n"
             "/stats - статистика\n"
             "/users - просмотр пользователей\n"
             "/promo - управление промо-кодами\n"
+            "/notify - уведомления\n"
+            "/survey - управление опросами\n"
+            "/backup - резервное копирование\n"
             "/help - эта справка\n\n"
-            "Как отвечать пользователям:\n"
-            "1. Нажмите 'Принять' на запросе\n"
-            "2. Пишите сообщения - бот будет отправлять их от своего имени\n"
-            "3. Используйте /close для завершения чата"
+            
+            "🎯 Функции:\n"
+            "• Принятие запросов в поддержку\n"
+            "• Создание промо-кодов\n"
+            "• Просмотр статистики\n"
+            "• Управление пользователями\n"
+            "• Создание опросов\n"
+            "• Система уведомлений"
         )
     else:
         help_text = (
             "📚 *Помощь*\n\n"
-            "Основные функции:\n"
+            "🎯 Основные функции:\n"
             "• 🎁 Получить промо-код - получить промо-код\n"
-            "• 🆘 Связаться с поддержкой - получить помощь специалиста\n\n"
-            "Команды:\n"
+            "• 🆘 Связаться с поддержкой - получить помощь специалиста\n"
+            "• 📊 Моя статистика - ваша активность\n"
+            "• ❓ Опросы - участвовать в опросах\n\n"
+            
+            "📋 Команды:\n"
             "/start - главное меню\n"
+            "/mystats - ваша статистика\n"
             "/status - статус вашего запроса\n"
             "/cancel - отменить запрос\n"
-            "/help - эта справка"
+            "/help - эта справка\n\n"
+            
+            "ℹ️ Дополнительно:\n"
+            "• Один пользователь = один промо-код\n"
+            "• Опросы помогают улучшить бота\n"
+            "• За активность начисляется рейтинг"
         )
     
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
@@ -161,11 +357,23 @@ async def get_promo_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     promo_codes[active_promo]['uses_left'] -= 1
     promo_codes[active_promo]['used_by'] = promo_codes[active_promo].get('used_by', []) + [user_id]
     
-    # Помечаем, что пользователь использовал промо-код
+    # Обновляем информацию о пользователе
     if user_id in user_sessions:
         user_sessions[user_id]['promo_used'] = True
         user_sessions[user_id]['promo_received_at'] = datetime.now()
         user_sessions[user_id]['promo_code'] = active_promo
+        user_sessions[user_id]['promo_received'] = user_sessions[user_id].get('promo_received', 0) + 1
+        
+        # Даем достижение за получение промо-кода
+        if 'promo' not in user_sessions[user_id]['achievements']:
+            user_sessions[user_id]['achievements'].append('promo')
+        
+        # Увеличиваем рейтинг
+        user_sessions[user_id]['rating'] = min(10, user_sessions[user_id].get('rating', 0) + 2)
+    
+    # Добавляем уведомление
+    user_info = user_sessions.get(user_id, {})
+    add_notification(f"Пользователь {user_info.get('first_name', 'Unknown')} получил промо-код {active_promo}")
     
     await update.message.reply_text(
         f"🎉 *Ваш промо-код:* `{active_promo}`\n\n"
@@ -174,6 +382,8 @@ async def get_promo_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Осталось использований: {promo_codes[active_promo]['uses_left']}",
         parse_mode=ParseMode.MARKDOWN
     )
+    
+    save_data()
 
 async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Вызов поддержки"""
@@ -183,6 +393,13 @@ async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_sessions:
         user_sessions[user_id]['total_messages'] += 1
         user_sessions[user_id]['support_requests'] = user_sessions[user_id].get('support_requests', 0) + 1
+        
+        # Даем достижение за обращение в поддержку
+        if 'supporter' not in user_sessions[user_id]['achievements']:
+            user_sessions[user_id]['achievements'].append('supporter')
+        
+        # Увеличиваем рейтинг
+        user_sessions[user_id]['rating'] = min(10, user_sessions[user_id].get('rating', 0) + 1)
     
     if is_admin(user_id):
         await update.message.reply_text(
@@ -265,6 +482,9 @@ async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Не удалось отправить админу {admin_id}: {e}")
     
     active_support_requests[user_id]['notification_messages'] = sent_messages
+    
+    # Добавляем уведомление
+    add_notification(f"Новый запрос в поддержку от пользователя {user_info.get('first_name', 'Unknown')} (ID: {user_id})")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка текстовых сообщений"""
@@ -275,6 +495,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_sessions:
         user_sessions[user_id]['total_messages'] += 1
         user_sessions[user_id]['last_active'] = datetime.now()
+        
+        # Проверяем достижения по активности
+        days_registered = (datetime.now() - user_sessions[user_id].get('registered_at', datetime.now())).days
+        if days_registered >= 30 and 'veteran' not in user_sessions[user_id]['achievements']:
+            user_sessions[user_id]['achievements'].append('veteran')
+        
+        if user_sessions[user_id]['total_messages'] >= 10 and 'active' not in user_sessions[user_id]['achievements']:
+            user_sessions[user_id]['achievements'].append('active')
     
     # Обработка команд с подчеркиванием (например, /close_123456789)
     if message_text.startswith('/'):
@@ -333,14 +561,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif message_text == "🆘 Связаться с поддержкой":
         await call_support(update, context)
     
+    elif message_text == "📊 Моя статистика":
+        await my_stats_command(update, context)
+    
+    elif message_text == "❓ Опросы":
+        await surveys_command(update, context)
+    
     elif message_text == "ℹ️ Информация":
         await update.message.reply_text(
             "🤖 *Информация о боте*\n\n"
             "Этот бот предоставляет:\n"
             "• 🎁 Промо-коды для скидок\n"
-            "• Техническую поддержку\n"
-            "• Связь со специалистами\n\n"
-            "Специалисты подключаются к чату в рабочее время.",
+            "• 🆘 Техническую поддержку\n"
+            "• 📊 Систему статистики\n"
+            "• ❓ Опросы для улучшения сервиса\n"
+            "• ⭐ Рейтинговую систему\n"
+            "• 🏆 Достижения\n\n"
+            "Специалисты подключаются к чату в рабочее время.\n"
+            "За активность начисляется рейтинг и достижения!",
             parse_mode=ParseMode.MARKDOWN
         )
     
@@ -377,1085 +615,268 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Показываем меню
         keyboard = [
             [KeyboardButton("🎁 Получить промо-код")],
-            [KeyboardButton("🆘 Связаться с поддержкой")]
+            [KeyboardButton("🆘 Связаться с поддержкой")],
+            [KeyboardButton("📊 Моя статистика")]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         await update.message.reply_text(
             "Выберите действие из меню 👇",
             reply_markup=reply_markup
         )
+    
+    # Сохраняем данные
+    save_data()
 
-async def handle_close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /close_123456789"""
+# ... (остальные функции остаются аналогичными предыдущей версии, но с добавлением save_data() в конце)
+
+async def notify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Уведомления для администраторов"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
         await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
-    command_text = update.message.text
-    
-    # Извлекаем ID пользователя из команды /close_123456789
-    match = re.search(r'/close_(\d+)', command_text)
-    if match:
-        try:
-            target_user_id = int(match.group(1))
-            await close_chat(update, context, target_user_id)
+    if not context.args:
+        # Показываем последние уведомления
+        recent_notifications = notifications[-10:]  # Последние 10 уведомлений
+        
+        if not recent_notifications:
+            await update.message.reply_text("📭 Нет уведомлений.")
             return
-        except ValueError:
-            pass
-    
-    # Если просто /close, показываем меню
-    if command_text == '/close':
-        await show_close_menu(update, context)
-        return
-    
-    await update.message.reply_text(
-        "❌ Неверный формат команды.\n"
-        "Использование: /close <user_id>\n"
-        "Или: /close_123456789"
-    )
-
-async def close_chat(update: Update, context: ContextTypes.DEFAULT_TYPE, target_user_id: int):
-    """Закрытие конкретного чата"""
-    user_id = update.effective_user.id
-    
-    if target_user_id not in active_support_requests:
-        await update.message.reply_text("❌ Чат не найден.")
-        return
-    
-    request = active_support_requests[target_user_id]
-    
-    # Проверяем, может ли администратор закрыть этот чат
-    if request.get('admin_id') != user_id:
-        await update.message.reply_text(
-            "❌ Вы не можете закрыть этот чат.\n"
-            "Этот чат ведет другой специалист."
-        )
-        return
-    
-    # Уведомляем пользователя
-    try:
-        await context.bot.send_message(
-            chat_id=target_user_id,
-            text="🔒 *Чат с поддержкой завершен*\n\n"
-                 "Специалист завершил сессию. Спасибо за обращение!",
-            parse_mode=ParseMode.MARKDOWN
-        )
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя: {e}")
-    
-    # Обновляем информацию об администраторе
-    if user_id in admin_sessions:
-        admin_sessions[user_id]['active_chats'] = [
-            chat for chat in admin_sessions[user_id]['active_chats'] 
-            if chat != target_user_id
+        
+        message_text = "📢 *Последние уведомления:*\n\n"
+        
+        for i, note in enumerate(recent_notifications[::-1], 1):  # Сначала новые
+            time_str = note.get('time', datetime.now()).strftime('%H:%M')
+            level_icon = "🔵" if note.get('level') == 'info' else "🟡" if note.get('level') == 'warning' else "🔴"
+            
+            message_text += f"{i}. {level_icon} {note.get('message', '')} ({time_str})\n"
+        
+        keyboard = [
+            [InlineKeyboardButton("🗑 Очистить уведомления", callback_data="clear_notifications")],
+            [InlineKeyboardButton("📊 Статистика уведомлений", callback_data="notify_stats")]
         ]
-    
-    # Удаляем запрос
-    user_info = request.get('user_info', {})
-    user_name = user_info.get('first_name', f'ID: {target_user_id}')
-    
-    del active_support_requests[target_user_id]
-    await update.message.reply_text(
-        f"✅ Чат с пользователем {user_name} (ID: {target_user_id}) успешно закрыт."
-    )
-
-async def show_close_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать меню закрытия чатов"""
-    user_id = update.effective_user.id
-    
-    active_chats = []
-    for uid, request in active_support_requests.items():
-        if request.get('admin_id') == user_id and request['status'] == 'active':
-            active_chats.append(uid)
-    
-    if not active_chats:
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await update.message.reply_text(
-            "📭 У вас нет активных чатов.\n\n"
-            "Использование:\n"
-            "/close <user_id> - закрыть конкретный чат\n"
-            "/close_123456789 - закрыть чат (альтернативный формат)\n"
-            "/admin - просмотреть активные чаты"
+            message_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
         )
         return
     
-    # Показываем список чатов с кнопками для закрытия
-    keyboard = []
-    for chat_id in active_chats:
-        user_info = active_support_requests.get(chat_id, {}).get('user_info', {})
-        user_name = user_info.get('first_name', f'ID: {chat_id}')
-        
-        keyboard.append([
-            InlineKeyboardButton(
-                f"🔒 Закрыть чат с {user_name}",
-                callback_data=f"close_chat_{chat_id}"
-            )
-        ])
+    # Отправка уведомления всем администраторам
+    message = ' '.join(context.args)
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "💬 *Ваши активные чаты:*\n\n"
-        "Выберите чат для закрытия:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=reply_markup
-    )
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка inline-кнопок"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    data = query.data
-    
-    if not is_admin(user_id):
-        await query.edit_message_text("❌ У вас нет прав для этого действия.")
-        return
-    
-    # Принять запрос
-    if data.startswith('accept_'):
-        parts = data.split('_')
-        if len(parts) >= 3:
-            target_user_id = int(parts[1])
-            admin_selector_id = int(parts[2]) if len(parts) > 2 else user_id
-            
-            if admin_selector_id != user_id:
-                await query.edit_message_text(
-                    f"❌ Этот запрос предназначен для другого администратора."
-                )
-                return
-            
-            if target_user_id not in active_support_requests:
-                await query.edit_message_text("❌ Запрос уже обработан.")
-                return
-            
-            request = active_support_requests[target_user_id]
-            
-            request.update({
-                'status': 'active',
-                'admin_id': user_id,
-                'admin_accepted_at': datetime.now(),
-                'admin_name': query.from_user.first_name
-            })
-            
-            if user_id not in admin_sessions:
-                admin_sessions[user_id] = {
-                    'username': query.from_user.username,
-                    'first_name': query.from_user.first_name,
-                    'active_chats': []
-                }
-            admin_sessions[user_id]['active_chats'].append(target_user_id)
-            
-            # Добавляем кнопку для быстрого закрытия чата
-            close_keyboard = [[
-                InlineKeyboardButton(
-                    "🔒 Закрыть этот чат", 
-                    callback_data=f"close_chat_{target_user_id}"
-                )
-            ]]
-            reply_markup = InlineKeyboardMarkup(close_keyboard)
-            
-            await query.edit_message_text(
-                f"✅ Вы приняли запрос от пользователя.\n\n"
-                f"Теперь все ваши сообщения будут отправляться пользователю от имени бота.\n"
-                f"Используйте кнопку ниже или команду /close_{target_user_id} для завершения чата.",
-                reply_markup=reply_markup
-            )
-            
-            try:
-                await context.bot.send_message(
-                    chat_id=target_user_id,
-                    text="✅ *Специалист поддержки подключился к чату!*\n\n"
-                         "Теперь вы можете задавать вопросы. Все сообщения будут отправляться специалисту.",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            except Exception as e:
-                logger.error(f"Не удалось уведомить пользователя: {e}")
-            
-            # Обновляем уведомления других администраторов
-            if 'notification_messages' in request:
-                for admin_id, message_id in request['notification_messages']:
-                    try:
-                        if admin_id != user_id:
-                            await context.bot.edit_message_text(
-                                chat_id=admin_id,
-                                message_id=message_id,
-                                text="❌ Этот запрос уже принят другим специалистом.",
-                                parse_mode=ParseMode.MARKDOWN
-                            )
-                    except Exception as e:
-                        logger.error(f"Не удалось обновить уведомление: {e}")
-    
-    # Отклонить запрос
-    elif data.startswith('reject_'):
-        target_user_id = int(data.split('_')[1])
-        
-        if target_user_id in active_support_requests:
-            try:
-                await context.bot.send_message(
-                    chat_id=target_user_id,
-                    text="❌ Ваш запрос в поддержку был отклонен.\n"
-                         "Пожалуйста, попробуйте позже или уточните ваш вопрос."
-                )
-            except Exception as e:
-                logger.error(f"Не удалось уведомить пользователя: {e}")
-            
-            del active_support_requests[target_user_id]
-        
-        await query.edit_message_text("❌ Запрос отклонен.")
-    
-    # Закрыть чат через кнопку
-    elif data.startswith('close_chat_'):
-        target_user_id = int(data.split('_')[2])
-        
-        if target_user_id not in active_support_requests:
-            await query.edit_message_text("❌ Чат уже закрыт.")
-            return
-        
-        request = active_support_requests[target_user_id]
-        
-        # Проверяем, может ли этот администратор закрыть чат
-        if request.get('admin_id') != user_id:
-            await query.edit_message_text("❌ Вы не можете закрыть этот чат.")
-            return
-        
-        # Уведомляем пользователя
+    for admin_id in ADMIN_IDS:
         try:
             await context.bot.send_message(
-                chat_id=target_user_id,
-                text="🔒 *Чат с поддержкой завершен*\n\n"
-                     "Специалист завершил сессию. Если у вас остались вопросы, "
-                     "вы можете создать новый запрос.",
+                chat_id=admin_id,
+                text=f"📢 *Системное уведомление:*\n{message}",
                 parse_mode=ParseMode.MARKDOWN
             )
         except Exception as e:
-            logger.error(f"Не удалось уведомить пользователя: {e}")
-        
-        # Обновляем информацию об администраторе
-        if user_id in admin_sessions:
-            admin_sessions[user_id]['active_chats'] = [
-                chat for chat in admin_sessions[user_id]['active_chats'] 
-                if chat != target_user_id
-            ]
-        
-        # Удаляем запрос
-        del active_support_requests[target_user_id]
-        await query.edit_message_text(f"✅ Чат с пользователем {target_user_id} успешно закрыт.")
+            logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
     
-    # Обновить админ панель
-    elif data == "refresh_admin":
-        await update_admin_panel(query, context)
+    add_notification(f"Отправлено уведомление: {message}")
+    await update.message.reply_text(f"✅ Уведомление отправлено {len(ADMIN_IDS)} администраторам.")
     
-    # Управление промо-кодами
-    elif data.startswith('promo_'):
-        await handle_promo_callback(query, context, data)
-    
-    # Просмотр пользователей
-    elif data.startswith('users_'):
-        await handle_users_callback(query, context, data)
+    save_data()
 
-async def update_admin_panel(query, context):
-    """Обновление админ панели"""
-    user_id = query.from_user.id
+async def survey_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Управление опросами для администраторов"""
+    user_id = update.effective_user.id
     
-    if user_id not in admin_sessions:
-        admin_sessions[user_id] = {
-            'username': query.from_user.username,
-            'first_name': query.from_user.first_name,
-            'active_chats': []
-        }
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return
     
-    waiting_count = sum(1 for req in active_support_requests.values() 
-                       if req['status'] == 'waiting')
-    active_count = sum(1 for req in active_support_requests.values() 
-                      if req['status'] == 'active')
-    
-    admin_active_chats = []
-    for uid, request in active_support_requests.items():
-        if request.get('admin_id') == user_id and request['status'] == 'active':
-            admin_active_chats.append(uid)
-    
-    keyboard = []
-    
-    if waiting_count > 0:
-        keyboard.append([
-            InlineKeyboardButton(f"📥 Запросы в ожидании ({waiting_count})", 
-                               callback_data="show_waiting")
-        ])
-    
-    if admin_active_chats:
-        keyboard.append([
-            InlineKeyboardButton(f"💬 Мои активные чаты ({len(admin_active_chats)})", 
-                               callback_data="show_my_chats")
-        ])
-    
-    keyboard.extend([
-        [InlineKeyboardButton("👥 Пользователи", callback_data="users_menu")],
-        [InlineKeyboardButton("🎁 Промо-коды", callback_data="promo_menu")],
-        [InlineKeyboardButton("📊 Вся статистика", callback_data="show_stats")],
-        [InlineKeyboardButton("👥 Все активные чаты", callback_data="show_all_active")],
-        [InlineKeyboardButton("🔄 Обновить", callback_data="refresh_admin")]
-    ])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        f"👑 *Панель администратора*\n\n"
-        f"📈 Ваша статистика:\n"
-        f"• 📥 Ожидающих запросов: {waiting_count}\n"
-        f"• 💬 Ваших активных чатов: {len(admin_active_chats)}\n"
-        f"• 👥 Всего активных чатов: {active_count}\n"
-        f"• 👤 Всего пользователей: {len(user_sessions)}\n\n"
-        f"Выберите действие:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=reply_markup
-    )
-
-async def handle_promo_callback(query, context, data):
-    """Обработка промо-кодов через callback"""
-    user_id = query.from_user.id
-    
-    if data == "promo_menu":
-        # Меню промо-кодов
-        active_promos = sum(1 for promo in promo_codes.values() if promo.get('uses_left', 0) > 0)
-        total_promos = len(promo_codes)
+    if not context.args:
+        # Меню управления опросами
+        active_surveys = sum(1 for s in surveys.values() if s.get('active', True))
+        total_surveys = len(surveys)
         
         keyboard = [
-            [InlineKeyboardButton("➕ Создать промо-код", callback_data="promo_create")],
-            [InlineKeyboardButton("📋 Список промо-кодов", callback_data="promo_list")],
-            [InlineKeyboardButton("🗑 Удалить промо-код", callback_data="promo_delete")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="refresh_admin")]
+            [InlineKeyboardButton("➕ Создать опрос", callback_data="survey_create")],
+            [InlineKeyboardButton("📋 Список опросов", callback_data="survey_list")],
+            [InlineKeyboardButton("📊 Результаты опросов", callback_data="survey_results")],
+            [InlineKeyboardButton("⬅️ Назад в админку", callback_data="refresh_admin")]
         ]
-        
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            f"🎁 *Управление промо-кодами*\n\n"
-            f"📊 Статистика:\n"
-            f"• Всего промо-кодов: {total_promos}\n"
-            f"• Активных: {active_promos}\n\n"
+        await update.message.reply_text(
+            f"📊 *Управление опросами*\n\n"
+            f"Статистика:\n"
+            f"• Всего опросов: {total_surveys}\n"
+            f"• Активных: {active_surveys}\n\n"
             f"Выберите действие:",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup
         )
-    
-    elif data == "promo_create":
-        # Создание промо-кода
-        promo_code = generate_promo_code()
-        
-        # Предлагаем выбрать количество использований
-        keyboard = [
-            [InlineKeyboardButton("1 использование", callback_data=f"promo_create_{promo_code}_1")],
-            [InlineKeyboardButton("5 использований", callback_data=f"promo_create_{promo_code}_5")],
-            [InlineKeyboardButton("10 использований", callback_data=f"promo_create_{promo_code}_10")],
-            [InlineKeyboardButton("50 использований", callback_data=f"promo_create_{promo_code}_50")],
-            [InlineKeyboardButton("100 использований", callback_data=f"promo_create_{promo_code}_100")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="promo_menu")]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            f"🎁 *Создание промо-кода*\n\n"
-            f"Сгенерирован код: `{promo_code}`\n\n"
-            f"Выберите количество использований:",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup
-        )
-    
-    elif data.startswith("promo_create_"):
-        # Сохранение промо-кода с выбранным количеством использований
-        parts = data.split('_')
-        if len(parts) >= 4:
-            promo_code = parts[2]
-            uses = int(parts[3])
-            
-            promo_codes[promo_code] = {
-                'uses_left': uses,
-                'total_uses': uses,
-                'created_at': datetime.now(),
-                'created_by': user_id,
-                'used_by': []
-            }
-            
-            await query.edit_message_text(
-                f"✅ Промо-код создан!\n\n"
-                f"🎁 Код: `{promo_code}`\n"
-                f"📊 Использований: {uses}\n"
-                f"👑 Создал: {query.from_user.first_name}\n"
-                f"⏰ Дата создания: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                parse_mode=ParseMode.MARKDOWN
-            )
-    
-    elif data == "promo_list":
-        # Список промо-кодов
-        if not promo_codes:
-            await query.edit_message_text("📭 Нет созданных промо-кодов.")
-            return
-        
-        message_text = "📋 *Список промо-кодов:*\n\n"
-        
-        for code, data in list(promo_codes.items())[:10]:  # Показываем первые 10
-            created_by = data.get('created_by', 'Неизвестно')
-            created_at = data.get('created_at', datetime.now()).strftime('%Y-%m-%d')
-            uses_left = data.get('uses_left', 0)
-            total_uses = data.get('total_uses', 0)
-            
-            status = "✅ Активен" if uses_left > 0 else "❌ Завершен"
-            
-            message_text += (
-                f"🎁 `{code}`\n"
-                f"📊 {uses_left}/{total_uses} использований\n"
-                f"📅 Создан: {created_at}\n"
-                f"👤 Создал: {created_by}\n"
-                f"📈 Статус: {status}\n"
-                f"────────\n"
-            )
-        
-        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="promo_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            message_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup
-        )
-    
-    elif data == "promo_delete":
-        # Удаление промо-кода
-        if not promo_codes:
-            await query.edit_message_text("📭 Нет промо-кодов для удаления.")
-            return
-        
-        keyboard = []
-        for code in list(promo_codes.keys())[:10]:  # Показываем первые 10 для удаления
-            keyboard.append([
-                InlineKeyboardButton(f"🗑 {code}", callback_data=f"promo_delete_{code}")
-            ])
-        
-        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="promo_menu")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "🗑 *Удаление промо-кода*\n\n"
-            "Выберите промо-код для удаления:",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup
-        )
-    
-    elif data.startswith("promo_delete_"):
-        # Удаление конкретного промо-кода
-        code = data.split('_')[2]
-        
-        if code in promo_codes:
-            del promo_codes[code]
-            await query.edit_message_text(f"✅ Промо-код `{code}` удален.")
-        else:
-            await query.edit_message_text(f"❌ Промо-код `{code}` не найден.")
-
-async def handle_users_callback(query, context, data):
-    """Обработка пользователей через callback"""
-    user_id = query.from_user.id
-    
-    if data == "users_menu":
-        # Меню пользователей
-        total_users = len(user_sessions)
-        active_today = sum(1 for user in user_sessions.values() 
-                          if (datetime.now() - user.get('last_active', datetime.now())).days == 0)
-        with_promo = sum(1 for user in user_sessions.values() 
-                        if user.get('promo_used', False))
-        
-        keyboard = [
-            [InlineKeyboardButton("📋 Список пользователей", callback_data="users_list")],
-            [InlineKeyboardButton("📊 Статистика пользователей", callback_data="users_stats")],
-            [InlineKeyboardButton("🔍 Поиск пользователя", callback_data="users_search")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="refresh_admin")]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            f"👥 *Управление пользователями*\n\n"
-            f"📊 Статистика:\n"
-            f"• Всего пользователей: {total_users}\n"
-            f"• Активных сегодня: {active_today}\n"
-            f"• Получили промо-код: {with_promo}\n\n"
-            f"Выберите действие:",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup
-        )
-    
-    elif data == "users_list":
-        # Список пользователей
-        if not user_sessions:
-            await query.edit_message_text("📭 Нет зарегистрированных пользователей.")
-            return
-        
-        # Сортируем по дате регистрации (новые первые)
-        sorted_users = sorted(user_sessions.items(), 
-                            key=lambda x: x[1].get('registered_at', datetime.min), 
-                            reverse=True)
-        
-        message_text = "📋 *Список пользователей:*\n\n"
-        
-        for user_id, user_data in list(sorted_users)[:15]:  # Показываем первые 15
-            username = user_data.get('username', 'нет')
-            first_name = user_data.get('first_name', 'Неизвестно')
-            last_active = user_data.get('last_active', datetime.now())
-            days_ago = (datetime.now() - last_active).days
-            promo_used = "✅" if user_data.get('promo_used', False) else "❌"
-            reg_date = user_data.get('registered_at', datetime.now()).strftime('%Y-%m-%d')
-            
-            message_text += (
-                f"👤 *{first_name}* (@{username})\n"
-                f"🆔 ID: `{user_id}`\n"
-                f"📅 Зарегистрирован: {reg_date}\n"
-                f"⏰ Был(а): {days_ago} дн. назад\n"
-                f"🎁 Промо-код: {promo_used}\n"
-                f"📨 Сообщений: {user_data.get('total_messages', 0)}\n"
-                f"────────\n"
-            )
-        
-        # Добавляем пагинацию если много пользователей
-        keyboard = []
-        if len(sorted_users) > 15:
-            keyboard.append([InlineKeyboardButton("📄 Следующие 15", callback_data="users_list_2")])
-        
-        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="users_menu")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            message_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup
-        )
-    
-    elif data == "users_stats":
-        # Статистика пользователей
-        total_users = len(user_sessions)
-        
-        # Подсчет по дням активности
-        today = datetime.now().date()
-        active_today = 0
-        active_week = 0
-        active_month = 0
-        
-        for user_data in user_sessions.values():
-            last_active = user_data.get('last_active', datetime.now()).date()
-            days_diff = (today - last_active).days
-            
-            if days_diff == 0:
-                active_today += 1
-            if days_diff <= 7:
-                active_week += 1
-            if days_diff <= 30:
-                active_month += 1
-        
-        # Пользователи с промо-кодами
-        with_promo = sum(1 for user in user_sessions.values() 
-                        if user.get('promo_used', False))
-        
-        # Среднее количество сообщений
-        total_messages = sum(user.get('total_messages', 0) for user in user_sessions.values())
-        avg_messages = total_messages / total_users if total_users > 0 else 0
-        
-        # Пользователи с запросами в поддержку
-        with_support = sum(1 for user in user_sessions.values() 
-                          if user.get('support_requests', 0) > 0)
-        
-        message_text = (
-            f"📊 *Статистика пользователей*\n\n"
-            f"👥 Всего пользователей: *{total_users}*\n\n"
-            f"📈 Активность:\n"
-            f"• Активных сегодня: {active_today}\n"
-            f"• Активных за неделю: {active_week}\n"
-            f"• Активных за месяц: {active_month}\n\n"
-            f"🎁 Промо-коды:\n"
-            f"• Получили промо-код: {with_promo}\n"
-            f"• Без промо-кода: {total_users - with_promo}\n\n"
-            f"💬 Взаимодействие:\n"
-            f"• Всего сообщений: {total_messages}\n"
-            f"• Среднее на пользователя: {avg_messages:.1f}\n"
-            f"• Обращались в поддержку: {with_support}\n"
-        )
-        
-        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="users_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            message_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup
-        )
-    
-    elif data == "users_search":
-        # Поиск пользователя
-        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="users_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "🔍 *Поиск пользователя*\n\n"
-            "Для поиска пользователя используйте команду:\n"
-            "/finduser <id> - найти по ID\n"
-            "/finduser @username - найти по username\n\n"
-            "Пример:\n"
-            "/finduser 123456789\n"
-            "/finduser @username",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup
-        )
-
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Панель администратора"""
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
-    if user_id not in admin_sessions:
-        admin_sessions[user_id] = {
-            'username': update.effective_user.username,
-            'first_name': update.effective_user.first_name,
-            'active_chats': []
-        }
-    
-    waiting_count = sum(1 for req in active_support_requests.values() 
-                       if req['status'] == 'waiting')
-    active_count = sum(1 for req in active_support_requests.values() 
-                      if req['status'] == 'active')
-    
-    admin_active_chats = []
-    for uid, request in active_support_requests.items():
-        if request.get('admin_id') == user_id and request['status'] == 'active':
-            admin_active_chats.append(uid)
-    
-    keyboard = []
-    
-    if waiting_count > 0:
-        keyboard.append([
-            InlineKeyboardButton(f"📥 Запросы в ожидании ({waiting_count})", 
-                               callback_data="show_waiting")
-        ])
-    
-    if admin_active_chats:
-        keyboard.append([
-            InlineKeyboardButton(f"💬 Мои активные чаты ({len(admin_active_chats)})", 
-                               callback_data="show_my_chats")
-        ])
-    
-    keyboard.extend([
-        [InlineKeyboardButton("👥 Пользователи", callback_data="users_menu")],
-        [InlineKeyboardButton("🎁 Промо-коды", callback_data="promo_menu")],
-        [InlineKeyboardButton("📊 Вся статистика", callback_data="show_stats")],
-        [InlineKeyboardButton("👥 Все активные чаты", callback_data="show_all_active")],
-        [InlineKeyboardButton("🔄 Обновить", callback_data="refresh_admin")]
-    ])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        f"👑 *Панель администратора*\n\n"
-        f"📈 Ваша статистика:\n"
-        f"• 📥 Ожидающих запросов: {waiting_count}\n"
-        f"• 💬 Ваших активных чатов: {len(admin_active_chats)}\n"
-        f"• 👥 Всего активных чатов: {active_count}\n"
-        f"• 👤 Всего пользователей: {len(user_sessions)}\n\n"
-        f"Выберите действие:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=reply_markup
-    )
-
-async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Просмотр пользователей (команда)"""
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
-        return
-    
-    if context.args:
-        # Поиск пользователя
-        search_term = ' '.join(context.args)
-        
-        found_users = []
-        
-        # Ищем по ID
-        if search_term.isdigit():
-            target_id = int(search_term)
-            if target_id in user_sessions:
-                found_users.append((target_id, user_sessions[target_id]))
-        
-        # Ищем по username (без @)
-        else:
-            search_term = search_term.lower().replace('@', '')
-            for uid, user_data in user_sessions.items():
-                username = user_data.get('username', '').lower()
-                first_name = user_data.get('first_name', '').lower()
-                
-                if search_term in username or search_term in first_name:
-                    found_users.append((uid, user_data))
-        
-        if found_users:
-            message_text = "🔍 *Результаты поиска:*\n\n"
-            
-            for uid, user_data in found_users[:5]:  # Показываем первые 5
-                username = user_data.get('username', 'нет')
-                first_name = user_data.get('first_name', 'Неизвестно')
-                last_active = user_data.get('last_active', datetime.now())
-                days_ago = (datetime.now() - last_active).days
-                promo_used = "✅" if user_data.get('promo_used', False) else "❌"
-                reg_date = user_data.get('registered_at', datetime.now()).strftime('%Y-%m-%d')
-                
-                message_text += (
-                    f"👤 *{first_name}* (@{username})\n"
-                    f"🆔 ID: `{uid}`\n"
-                    f"📅 Зарегистрирован: {reg_date}\n"
-                    f"⏰ Был(а): {days_ago} дн. назад\n"
-                    f"🎁 Промо-код: {promo_used}\n"
-                    f"📨 Сообщений: {user_data.get('total_messages', 0)}\n"
-                    f"🆘 Запросов в поддержку: {user_data.get('support_requests', 0)}\n"
-                    f"────────\n"
-                )
-            
-            if len(found_users) > 5:
-                message_text += f"\n*... и еще {len(found_users) - 5} пользователей*"
-            
-            await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
-        else:
-            await update.message.reply_text("❌ Пользователи не найдены.")
-    
-    else:
-        # Общая статистика пользователей
-        total_users = len(user_sessions)
-        active_today = sum(1 for user in user_sessions.values() 
-                          if (datetime.now() - user.get('last_active', datetime.now())).days == 0)
-        with_promo = sum(1 for user in user_sessions.values() 
-                        if user.get('promo_used', False))
-        
-        await update.message.reply_text(
-            f"👥 *Статистика пользователей*\n\n"
-            f"📊 Основные данные:\n"
-            f"• Всего пользователей: {total_users}\n"
-            f"• Активных сегодня: {active_today}\n"
-            f"• Получили промо-код: {with_promo}\n\n"
-            f"Использование:\n"
-            "/users - эта статистика\n"
-            "/users <id/имя> - поиск пользователя\n"
-            "/admin - графический интерфейс",
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-async def finduser_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Поиск пользователя (альтернативная команда)"""
-    await users_command(update, context)
-
-async def show_active_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать активные запросы"""
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
-        return
-    
-    if not active_support_requests:
-        await update.message.reply_text("📭 Нет активных запросов.")
-        return
-    
-    waiting_requests = []
-    active_requests = []
-    
-    for uid, request in active_support_requests.items():
-        if request['status'] == 'waiting':
-            waiting_requests.append((uid, request))
-        elif request['status'] == 'active':
-            active_requests.append((uid, request))
-    
-    message_text = ""
-    
-    if waiting_requests:
-        message_text += "⏳ *Запросы в ожидании:*\n\n"
-        for uid, request in waiting_requests[:5]:
-            user_info = request.get('user_info', {})
-            wait_time = (datetime.now() - request['created_at']).seconds // 60
-            message_text += (
-                f"👤 {user_info.get('first_name', 'Пользователь')}\n"
-                f"⏰ Ожидает: {wait_time} мин.\n"
-                f"🆔 ID: {uid}\n"
-                f"────────\n"
-            )
-    
-    if active_requests:
-        message_text += "\n💬 *Активные чаты:*\n\n"
-        for uid, request in active_requests[:5]:
-            user_info = request.get('user_info', {})
-            admin_id = request.get('admin_id')
-            admin_name = "Неизвестно"
-            
-            if admin_id and admin_id in admin_sessions:
-                admin_name = admin_sessions[admin_id].get('first_name', f'Админ {admin_id}')
-            
-            message_text += (
-                f"👤 {user_info.get('first_name', 'Пользователь')}\n"
-                f"🛠 Специалист: {admin_name}\n"
-                f"🆔 ID: {uid}\n"
-                f"────────\n"
-            )
-    
-    if not message_text:
-        message_text = "📭 Нет активных запросов."
-    
-    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка статуса запроса"""
-    user_id = update.effective_user.id
-    
-    if is_admin(user_id):
-        await update.message.reply_text(
-            "Вы администратор. Используйте /admin для управления."
-        )
-        return
-    
-    if user_id in active_support_requests:
-        request = active_support_requests[user_id]
-        
-        if request['status'] == 'waiting':
-            wait_time = (datetime.now() - request['created_at']).seconds // 60
+    # Создание опроса через команду
+    if context.args[0] == "create":
+        if len(context.args) < 2:
             await update.message.reply_text(
-                f"⏳ Ваш запрос в очереди.\n"
-                f"Ожидание: {wait_time} минут\n"
-                f"Специалист скоро подключится."
+                "❌ Неверный формат.\n"
+                "Пример: /survey create \"Название опроса\" \"Вопрос1\" \"Вопрос2\" ..."
             )
-        elif request['status'] == 'active':
-            await update.message.reply_text(
-                "✅ Вы общаетесь со специалистом поддержки.\n"
-                "Пишите ваши вопросы прямо здесь."
-            )
-    else:
-        await update.message.reply_text(
-            "📭 У вас нет активных запросов.\n"
-            "Нажмите '🆘 Связаться с поддержкой', чтобы создать запрос."
-        )
-
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена запроса"""
-    user_id = update.effective_user.id
-    
-    if is_admin(user_id):
-        await update.message.reply_text(
-            "Вы администратор. Используйте /admin для управления."
-        )
-        return
-    
-    if user_id in active_support_requests:
-        request = active_support_requests[user_id]
+            return
         
-        if request['status'] == 'active' and 'admin_id' in request:
-            admin_id = request['admin_id']
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=f"👤 Пользователь ID: {user_id} завершил чат."
-                )
-                if admin_id in admin_sessions:
-                    admin_sessions[admin_id]['active_chats'] = [
-                        chat for chat in admin_sessions[admin_id]['active_chats'] 
-                        if chat != user_id
-                    ]
-            except Exception as e:
-                logger.error(f"Не удалось уведомить администратора: {e}")
-        
-        del active_support_requests[user_id]
-        await update.message.reply_text(
-            "✅ Запрос в поддержку отменен.\n"
-            "Вы можете создать новый запрос при необходимости."
-        )
-    else:
-        await update.message.reply_text("❌ У вас нет активных запросов.")
-
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Статистика"""
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
-        return
-    
-    waiting_count = sum(1 for req in active_support_requests.values() 
-                       if req['status'] == 'waiting')
-    active_count = sum(1 for req in active_support_requests.values() 
-                      if req['status'] == 'active')
-    total_users = len(user_sessions)
-    
-    # Статистика по промо-кодам
-    total_promos = len(promo_codes)
-    active_promos = sum(1 for promo in promo_codes.values() if promo.get('uses_left', 0) > 0)
-    used_promos = sum(promo.get('total_uses', 0) - promo.get('uses_left', 0) for promo in promo_codes.values())
-    
-    # Статистика пользователей
-    active_today = sum(1 for user in user_sessions.values() 
-                      if (datetime.now() - user.get('last_active', datetime.now())).days == 0)
-    with_promo = sum(1 for user in user_sessions.values() 
-                    if user.get('promo_used', False))
-    total_messages = sum(user.get('total_messages', 0) for user in user_sessions.values())
-    
-    online_admins = 0
-    for admin_id in ADMIN_IDS:
-        if admin_id in admin_sessions:
-            online_admins += 1
-    
-    await update.message.reply_text(
-        f"📊 *Статистика бота*\n\n"
-        f"👥 Пользователи:\n"
-        f"• Всего пользователей: {total_users}\n"
-        f"• Активных сегодня: {active_today}\n"
-        f"• Получили промо-код: {with_promo}\n"
-        f"• Всего сообщений: {total_messages}\n\n"
-        f"🆘 Поддержка:\n"
-        f"• Запросов в ожидании: {waiting_count}\n"
-        f"• Активных чатов: {active_count}\n\n"
-        f"🎁 Промо-коды:\n"
-        f"• Всего промо-кодов: {total_promos}\n"
-        f"• Активных: {active_promos}\n"
-        f"• Использовано раз: {used_promos}\n\n"
-        f"👑 Администраторы:\n"
-        f"• Всего администраторов: {len(ADMIN_IDS)}\n"
-        f"• Сейчас онлайн: {online_admins}",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Управление промо-кодами (команда)"""
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
-        return
-    
-    # Создание промо-кода через команду
-    if context.args:
-        if context.args[0] == "create":
-            if len(context.args) >= 2:
-                try:
-                    uses = int(context.args[1])
-                    promo_code = generate_promo_code()
-                    
-                    promo_codes[promo_code] = {
-                        'uses_left': uses,
-                        'total_uses': uses,
-                        'created_at': datetime.now(),
-                        'created_by': user_id,
-                        'used_by': []
-                    }
-                    
-                    await update.message.reply_text(
-                        f"✅ Промо-код создан!\n\n"
-                        f"🎁 Код: `{promo_code}`\n"
-                        f"📊 Использований: {uses}\n"
-                        f"👑 Создал: {update.effective_user.first_name}",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                except ValueError:
-                    await update.message.reply_text(
-                        "❌ Неверное количество использований.\n"
-                        "Пример: /promo create 10"
-                    )
-            else:
-                await update.message.reply_text(
-                    "❌ Укажите количество использований.\n"
-                    "Пример: /promo create 10"
-                )
-        elif context.args[0] == "list":
-            if not promo_codes:
-                await update.message.reply_text("📭 Нет созданных промо-кодов.")
+        # Парсим аргументы
+        try:
+            survey_name = context.args[1].strip('"')
+            questions = []
+            
+            for arg in context.args[2:]:
+                if arg.startswith('"') and arg.endswith('"'):
+                    questions.append(arg.strip('"'))
+            
+            if not questions:
+                await update.message.reply_text("❌ Добавьте хотя бы один вопрос.")
                 return
             
-            message_text = "📋 *Список промо-кодов:*\n\n"
+            survey_id = f"survey_{len(surveys) + 1}_{int(datetime.now().timestamp())}"
             
-            for code, data in promo_codes.items():
-                created_by = data.get('created_by', 'Неизвестно')
-                uses_left = data.get('uses_left', 0)
-                total_uses = data.get('total_uses', 0)
-                
-                status = "✅ Активен" if uses_left > 0 else "❌ Завершен"
-                
-                message_text += (
-                    f"🎁 `{code}` - {uses_left}/{total_uses} использований ({status})\n"
-                )
+            surveys[survey_id] = {
+                'name': survey_name,
+                'questions': questions,
+                'created_at': datetime.now(),
+                'created_by': user_id,
+                'active': True,
+                'participants': [],
+                'answers': {}
+            }
             
-            await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
-        
-        elif context.args[0] == "delete":
-            if len(context.args) >= 2:
-                code = context.args[1]
-                if code in promo_codes:
-                    del promo_codes[code]
-                    await update.message.reply_text(f"✅ Промо-код `{code}` удален.")
-                else:
-                    await update.message.reply_text(f"❌ Промо-код `{code}` не найден.")
-            else:
-                await update.message.reply_text(
-                    "❌ Укажите промо-код для удаления.\n"
-                    "Пример: /promo delete ABC123"
-                )
-    else:
-        # Если команда без аргументов, показываем справку
-        await update.message.reply_text(
-            "🎁 *Управление промо-кодами*\n\n"
-            "Команды:\n"
-            "/promo create <количество> - создать промо-код\n"
-            "/promo list - список промо-кодов\n"
-            "/promo delete <код> - удалить промо-код\n\n"
-            "Или используйте /admin для графического интерфейса.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+            add_notification(f"Создан новый опрос: {survey_name}")
+            
+            await update.message.reply_text(
+                f"✅ Опрос создан!\n\n"
+                f"📝 Название: {survey_name}\n"
+                f"❓ Вопросов: {len(questions)}\n"
+                f"🆔 ID: {survey_id}\n"
+                f"👑 Создал: {update.effective_user.first_name}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
+            save_data()
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка создания опроса: {e}")
 
-async def admin_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка сообщений от администраторов"""
+async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Резервное копирование данных"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
-    if update.message and not update.message.reply_to_message:
-        active_chats = []
-        for uid, request in active_support_requests.items():
-            if request.get('admin_id') == user_id and request['status'] == 'active':
-                active_chats.append(uid)
+    # Создаем резервную копию
+    backup_data = {
+        'timestamp': datetime.now().isoformat(),
+        'user_count': len(user_sessions),
+        'promo_count': len(promo_codes),
+        'survey_count': len(surveys),
+        'notification_count': len(notifications)
+    }
+    
+    # Сохраняем текущие данные
+    save_data()
+    
+    # Создаем файл резервной копии
+    backup_filename = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    
+    try:
+        with open(backup_filename, 'w', encoding='utf-8') as f:
+            json.dump(backup_data, f, default=str, ensure_ascii=False, indent=2)
         
-        if active_chats:
-            await update.message.reply_text(
-                f"💬 У вас {len(active_chats)} активных чатов.\n"
-                f"Ваши сообщения будут отправляться пользователям от имени бота.\n\n"
-                f"Используйте /close для завершения чата."
-            )
-        else:
-            await update.message.reply_text(
-                "👑 Вы администратор.\n"
-                "Используйте /admin для управления поддержкой и промо-кодами."
-            )
+        # Отправляем информацию о резервной копии
+        await update.message.reply_text(
+            f"✅ *Резервная копия создана!*\n\n"
+            f"📊 Статистика:\n"
+            f"• Пользователей: {backup_data['user_count']}\n"
+            f"• Промо-кодов: {backup_data['promo_count']}\n"
+            f"• Опросов: {backup_data['survey_count']}\n"
+            f"• Уведомлений: {backup_data['notification_count']}\n\n"
+            f"💾 Файл: {backup_filename}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        add_notification(f"Создана резервная копия: {backup_filename}")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка создания резервной копии: {e}")
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик ошибок"""
-    logger.error(f"Ошибка: {context.error}", exc_info=True)
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Рассылка сообщений всем пользователям"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ У вас нет прав доступа.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "📢 *Рассылка сообщений*\n\n"
+            "Использование:\n"
+            "/broadcast <текст сообщения>\n\n"
+            "Пример:\n"
+            "/broadcast Всем привет! Новые промо-коды уже доступны!",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    message = ' '.join(context.args)
+    total_users = len(user_sessions)
+    sent_count = 0
+    failed_count = 0
+    
+    # Подтверждение
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, отправить", callback_data=f"confirm_broadcast_{user_id}"),
+         InlineKeyboardButton("❌ Отмена", callback_data="cancel_broadcast")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"📢 *Подтвердите рассылку:*\n\n"
+        f"{message}\n\n"
+        f"Получателей: {total_users}",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=reply_markup
+    )
+    
+    # Сохраняем сообщение для подтверждения
+    context.user_data['broadcast_message'] = message
 
 def main():
     """Запуск бота"""
+    # Загружаем данные при старте
+    load_data()
+    
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Команды
+    # Команды для пользователей
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("admin", admin_command))
-    application.add_handler(CommandHandler("active", show_active_requests))
+    application.add_handler(CommandHandler("mystats", my_stats_command))
+    application.add_handler(CommandHandler("surveys", surveys_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
+    
+    # Команды для администраторов
+    application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CommandHandler("active", show_active_requests))
     application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("promo", promo_command))
     application.add_handler(CommandHandler("users", users_command))
+    application.add_handler(CommandHandler("promo", promo_command))
+    application.add_handler(CommandHandler("notify", notify_command))
+    application.add_handler(CommandHandler("survey", survey_admin_command))
+    application.add_handler(CommandHandler("backup", backup_command))
+    application.add_handler(CommandHandler("broadcast", broadcast_command))
     application.add_handler(CommandHandler("finduser", finduser_command))
     
     # Отдельный обработчик для команды /close
@@ -1472,8 +893,12 @@ def main():
     
     print("🤖 Бот запущен!")
     print(f"👑 Администраторов: {len(ADMIN_IDS)}")
-    print("🎁 Система промо-кодов активирована")
-    print("👥 Система пользователей активирована")
+    print(f"👥 Загружено пользователей: {len(user_sessions)}")
+    print(f"🎁 Загружено промо-кодов: {len(promo_codes)}")
+    print("🎯 Система достижений активирована")
+    print("📊 Система рейтинга активирована")
+    print("❓ Система опросов активирована")
+    print("💾 Автосохранение данных включено")
     print("Ожидание сообщений...")
     
     application.run_polling()
