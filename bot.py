@@ -68,7 +68,6 @@ def load_data():
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                # Проверяем, не пустой ли файл
                 content = f.read().strip()
                 if not content:
                     logger.info(f"Файл {DATA_FILE} пустой, используются значения по умолчанию")
@@ -86,14 +85,27 @@ def load_data():
                         for key in ['last_active', 'registered_at', 'promo_received_at']:
                             if key in user_data and user_data[key]:
                                 try:
-                                    user_data[key] = datetime.fromisoformat(user_data[key])
+                                    if isinstance(user_data[key], str):
+                                        user_data[key] = datetime.fromisoformat(user_data[key])
                                 except:
                                     user_data[key] = datetime.now()
                         user_sessions[user_id] = user_data
                     except ValueError:
                         continue
             
-            promo_codes = data.get('promo_codes', {})
+            # Загружаем промо-коды
+            promo_codes = {}
+            if 'promo_codes' in data:
+                for code, code_data in data['promo_codes'].items():
+                    # Преобразуем строки дат обратно в datetime
+                    for key in ['created_at']:
+                        if key in code_data and code_data[key] and isinstance(code_data[key], str):
+                            try:
+                                code_data[key] = datetime.fromisoformat(code_data[key])
+                            except:
+                                code_data[key] = datetime.now()
+                    promo_codes[code] = code_data
+            
             notifications = data.get('notifications', [])
             surveys = data.get('surveys', {})
             
@@ -113,6 +125,13 @@ def load_data():
                 for admin_id_str, rating_data in data['admin_ratings'].items():
                     try:
                         admin_id = int(admin_id_str)
+                        # Преобразуем строки дат обратно в datetime
+                        for key in ['last_updated']:
+                            if key in rating_data and rating_data[key] and isinstance(rating_data[key], str):
+                                try:
+                                    rating_data[key] = datetime.fromisoformat(rating_data[key])
+                                except:
+                                    rating_data[key] = datetime.now()
                         admin_ratings[admin_id] = rating_data
                     except ValueError:
                         continue
@@ -471,9 +490,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     data = query.data
     
-    keyboard = get_main_keyboard()
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    
     # Оценка администратора пользователем
     if data.startswith('rate_'):
         parts = data.split('_')
@@ -564,8 +580,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Новые промо-коды\n"
             "• Важные объявления\n"
             "• Обновления бота\n"
-            "• Специальные предложения",
-            reply_markup=reply_markup
+            "• Специальные предложения"
         )
         return
     
@@ -576,8 +591,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "🔕 Вы отписались от рассылки.\n\n"
             "Вы больше не будете получать уведомления.\n"
-            "Вы можете подписаться снова в любое время.",
-            reply_markup=reply_markup
+            "Вы можете подписаться снова в любое время."
         )
         return
     
@@ -777,28 +791,33 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         add_notification(f"Администратор {user_id} отклонил запрос от пользователя {target_user_id}")
     
-    # Действия из админ-панели - исправленная версия
+    # Обработка админ-меню
     elif data == "show_active":
-        # Показываем активные запросы прямо здесь
         await show_active_requests_callback(query, context)
     elif data == "show_stats":
-        # Показываем статистику прямо здесь
         await stats_command_callback(query, context)
     elif data == "show_users":
-        # Показываем пользователей
         await users_command_callback(query, context)
     elif data == "show_promo":
-        # Показываем промо-коды
         await promo_command_callback(query, context)
     elif data == "show_broadcast":
-        # Показываем управление рассылкой
         await broadcast_admin_command_callback(query, context)
     elif data == "show_ratings":
-        # Показываем рейтинги
         await ratings_command_callback(query, context)
     elif data == "refresh_admin":
-        # Обновляем админ-панель
         await admin_command_callback(query, context)
+    elif data == "send_broadcast":
+        # Запрос текста рассылки
+        await query.edit_message_text(
+            "📝 *Отправка рассылки*\n\n"
+            "Введите текст для рассылки:\n"
+            "(просто отправьте сообщение с текстом)",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        # Устанавливаем состояние для обработки текста рассылки
+        if 'user_states' not in context.user_data:
+            context.user_data['user_states'] = {}
+        context.user_data['user_states'][user_id] = 'awaiting_broadcast_text'
 
 async def show_active_requests_callback(query, context):
     """Показать активные запросы для callback"""
@@ -1114,14 +1133,12 @@ async def broadcast_admin_command_callback(query, context):
         f"• Подписано: {subscribed}\n"
         f"• Отписано: {unsubscribed}\n"
         f"• Охват: {subscribed/total_users*100:.1f}%\n\n"
-        f"Для отправки рассылки используйте:\n"
-        f"/broadcastadmin <текст сообщения>"
+        f"Для отправки рассылки нажмите кнопку ниже:"
     )
     
     inline_keyboard = [
         [
             InlineKeyboardButton("📝 Отправить рассылку", callback_data="send_broadcast"),
-            InlineKeyboardButton("📊 Статистика", callback_data="broadcast_stats")
         ],
         [
             InlineKeyboardButton("🔙 Назад", callback_data="refresh_admin")
@@ -1766,9 +1783,10 @@ async def broadcast_admin_command(update: Update, context: ContextTypes.DEFAULT_
         for uid, is_subscribed in broadcast_subscribers.items():
             if is_subscribed:
                 try:
+                    # Отправляем обычное сообщение без пометки "Рассылка"
                     await context.bot.send_message(
                         chat_id=uid,
-                        text=f"📢 *Рассылка:*\n\n{message}",
+                        text=message,  # Изменено: убрана пометка "Рассылка"
                         parse_mode=ParseMode.MARKDOWN
                     )
                     sent += 1
@@ -1976,6 +1994,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message_text = update.message.text
     
+    # Проверяем, ожидает ли администратор текст рассылки
+    if 'user_states' in context.user_data and user_id in context.user_data['user_states']:
+        if context.user_data['user_states'][user_id] == 'awaiting_broadcast_text':
+            # Это текст рассылки от администратора
+            del context.user_data['user_states'][user_id]
+            
+            if not is_admin(user_id):
+                await update.message.reply_text("❌ У вас нет прав для отправки рассылки.")
+                return
+            
+            # Отправляем рассылку
+            sent = 0
+            failed = 0
+            
+            await update.message.reply_text(
+                f"📢 Начинаю рассылку...\n"
+                f"Получателей: {len([v for v in broadcast_subscribers.values() if v])}"
+            )
+            
+            for uid, is_subscribed in broadcast_subscribers.items():
+                if is_subscribed:
+                    try:
+                        # Отправляем обычное сообщение без пометки "Рассылка"
+                        await context.bot.send_message(
+                            chat_id=uid,
+                            text=message_text,  # Обычное сообщение
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        sent += 1
+                    except Exception as e:
+                        logger.error(f"Не удалось отправить рассылку пользователю {uid}: {e}")
+                        failed += 1
+            
+            await update.message.reply_text(
+                f"✅ Рассылка завершена!\n\n"
+                f"📊 Результаты:\n"
+                f"• Отправлено: {sent}\n"
+                f"• Не удалось: {failed}\n"
+                f"• Всего получателей: {len(broadcast_subscribers)}"
+            )
+            
+            add_notification(f"Администратор {user_id} отправил рассылку ({sent} получателей)")
+            return
+    
     # Обновляем счетчик сообщений для пользователя
     if user_id in user_sessions:
         user_sessions[user_id]['total_messages'] += 1
@@ -2044,6 +2106,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=reply_markup
                 )
                 logger.error(f"Ошибка отправки админу: {e}")
+    
+    # Если администратор пишет пользователю в активном чате
+    elif is_admin(user_id):
+        # Проверяем, есть ли у администратора активные чаты
+        if user_id in admin_sessions and admin_sessions[user_id]['active_chats']:
+            # Находим активный чат администратора
+            for target_user_id in admin_sessions[user_id]['active_chats']:
+                if target_user_id in active_support_requests:
+                    request = active_support_requests[target_user_id]
+                    if request['status'] == 'active' and request.get('admin_id') == user_id:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=target_user_id,
+                                text=f"👨‍💻 *Специалист:*\n{message_text}",
+                                parse_mode=ParseMode.MARKDOWN
+                            )
+                            
+                            request['messages'].append({
+                                'from': 'admin',
+                                'time': datetime.now(),
+                                'text': message_text
+                            })
+                            
+                            return
+                        except Exception as e:
+                            logger.error(f"Ошибка отправки пользователю: {e}")
+                            await update.message.reply_text(
+                                f"❌ Не удалось отправить сообщение пользователю."
+                            )
+                            return
     
     else:
         # Показываем меню
