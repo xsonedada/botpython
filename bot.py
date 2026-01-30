@@ -534,13 +534,6 @@ async def info_handler(message: Message):
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=get_main_keyboard()
             )
-    else:
-        # Если URL фото не указан, отправляем только текст
-        await message.answer(
-            info_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=get_main_keyboard()
-        )
     
     await message.answer(info_text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
