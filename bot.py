@@ -19,7 +19,6 @@ import asyncio
 BOT_TOKEN = "8213844298:AAHbMtsO6WBT7nzfd7DkwMRLmSBJzruk-3E"
 WEBSITE_URL = "https://www.realtimegroup.ru/"
 INFO_PHOTO_URL = "https://www.realtimegroup.ru/bot_info.png"
-INFO_PHOTO_URLS = "https://www.realtimegroup.ru/hello.png" 
 ADMIN_IDS = [724770396]  # ID всех администраторов
 DATA_FILE = "bot_data.json"  # Файл для сохранения данных
 
@@ -261,24 +260,6 @@ async def cmd_start(message: Message):
         "• ℹ️ Информация - о возможностях бота"
     )
 
-    if INFO_PHOTO_URL:
-        try:
-            # Сначала отправляем фото с подписью
-            await message.answer_photo(
-                photo=INFO_PHOTO_URLS,
-                caption=info_text,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=get_main_keyboard()
-            )
-            return
-        except Exception as e:
-            logger.error(f"Ошибка отправки фото: {e}")
-            # Если не удалось отправить фото, отправляем только текст
-            await message.answer(
-                info_text,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=get_main_keyboard()
-            )
     
     await message.answer(welcome_text, reply_markup=get_main_keyboard())
     save_data()
