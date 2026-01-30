@@ -515,7 +515,7 @@ async def info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
             # Если у вас есть файл bot_info.jpg в директории
-            with open('bot_info.jpg', 'rb') as photo:
+            with open('bot_info.png', 'rb') as photo:
                 await update.message.reply_photo(
                     photo=photo,
                     caption=info_text,
