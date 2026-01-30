@@ -13,11 +13,12 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.enums import ParseMode
 import asyncio
-from aiogram.types import FSInputFile
+
 
 # Конфигурация
 BOT_TOKEN = "8213844298:AAHbMtsO6WBT7nzfd7DkwMRLmSBJzruk-3E"
 WEBSITE_URL = "https://www.realtimegroup.ru/"
+INFO_PHOTO_URL = "https://www.realtimegroup.ru/bot_info.png 
 ADMIN_IDS = [724770396]  # ID всех администраторов
 DATA_FILE = "bot_data.json"  # Файл для сохранения данных
 
@@ -514,19 +515,27 @@ async def info_handler(message: Message):
         "Специалисты подключаются к чату в рабочее время."
     )
 
-    try:
-        # Используйте локальный файл вместо URL
-        photo = FSInputFile("bot_info.png")  # Укажите путь к вашему фото
-        
-        await message.answer_photo(
-            photo=photo,
-            caption=info_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=get_main_keyboard()
-        )
-    except Exception as e:
-        logger.error(f"Ошибка отправки фото: {e}")
-        # Если не удалось отправить фото, отправляем только текст
+    # Проверяем, есть ли URL фото
+    if INFO_PHOTO_URL:
+        try:
+            # Сначала отправляем фото с подписью
+            await message.answer_photo(
+                photo=INFO_PHOTO_URL,
+                caption=info_text,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_main_keyboard()
+            )
+            return
+        except Exception as e:
+            logger.error(f"Ошибка отправки фото: {e}")
+            # Если не удалось отправить фото, отправляем только текст
+            await message.answer(
+                info_text,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_main_keyboard()
+            )
+    else:
+        # Если URL фото не указан, отправляем только текст
         await message.answer(
             info_text,
             parse_mode=ParseMode.MARKDOWN,
