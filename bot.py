@@ -11,10 +11,10 @@ BOT_TOKEN = "8213844298:AAHbMtsO6WBT7nzfd7DkwMRLmSBJzruk-3E"
 WEBSITE_URL = "https://www.realtimegroup.ru/"
 ADMIN_IDS = [724770396]  # ID всех администраторов (добавьте свои)
 
-# Хранилище данных (в продакшене используйте БД)
-active_support_requests: Dict[int, Dict] = {}  # Запросы в поддержку
-user_sessions: Dict[int, Dict] = {}  # Информация о пользователях
-admin_sessions: Dict[int, Dict] = {}  # Активные сессии администраторов
+# Хранилище данных
+active_support_requests: Dict[int, Dict] = {}
+user_sessions: Dict[int, Dict] = {}
+admin_sessions: Dict[int, Dict] = {}
 
 # Настройка логирования
 logging.basicConfig(
@@ -32,7 +32,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
     
-    # Главное меню
     keyboard = [
         [KeyboardButton("🌐 Открыть сайт", web_app=WebAppInfo(url=WEBSITE_URL))],
         [KeyboardButton("🆘 Связаться с поддержкой")],
@@ -40,7 +39,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
-    # Сохраняем информацию о пользователе
     user_sessions[user_id] = {
         'username': user.username,
         'first_name': user.first_name,
@@ -111,7 +109,6 @@ async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Проверяем существующий запрос
     if user_id in active_support_requests:
         request = active_support_requests[user_id]
         if request['status'] == 'waiting':
@@ -125,7 +122,6 @@ async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
     
-    # Создаем новый запрос
     active_support_requests[user_id] = {
         'chat_id': update.effective_chat.id,
         'status': 'waiting',
@@ -142,7 +138,6 @@ async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN
     )
     
-    # Отправляем уведомление всем администраторам
     user_info = user_sessions.get(user_id, {})
     notification_text = (
         f"🆘 *Новый запрос в поддержку!*\n\n"
@@ -168,14 +163,12 @@ async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Ошибка создания кнопки для админа {admin_id}: {e}")
     
-    # Кнопка "Отклонить" для всех
     keyboard.append([
         InlineKeyboardButton("❌ Отклонить запрос", callback_data=f"reject_{user_id}")
     ])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Отправляем каждому администратору
     sent_messages = []
     for admin_id in ADMIN_IDS:
         try:
@@ -189,7 +182,6 @@ async def call_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Не удалось отправить админу {admin_id}: {e}")
     
-    # Сохраняем ID сообщений для обновления
     active_support_requests[user_id]['notification_messages'] = sent_messages
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -197,9 +189,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message_text = update.message.text
     
-    # Проверяем, администратор ли это
     if is_admin(user_id):
-        # Администратор может быть в чате с пользователем
         target_user_id = None
         for uid, request in active_support_requests.items():
             if request.get('admin_id') == user_id and request['status'] == 'active':
@@ -207,7 +197,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 break
         
         if target_user_id:
-            # Пересылаем сообщение пользователю
             try:
                 await update.message.forward(target_user_id)
                 active_support_requests[target_user_id]['messages'].append({
@@ -222,7 +211,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Ошибка пересылки: {e}")
             return
     
-    # Обработка для обычных пользователей
     if message_text == "🌐 Открыть сайт":
         keyboard = [[KeyboardButton("🌐 Открыть сайт", web_app=WebAppInfo(url=WEBSITE_URL))]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -245,14 +233,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
     
-    # Если пользователь в активном чате с поддержкой
     elif user_id in active_support_requests:
         request = active_support_requests[user_id]
         if request['status'] == 'active' and 'admin_id' in request:
             admin_id = request['admin_id']
             
             try:
-                # Пересылаем сообщение администратору
                 await update.message.forward(admin_id)
                 request['messages'].append({
                     'from': 'user',
@@ -266,7 +252,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Ошибка отправки админу: {e}")
     
     else:
-        # Показываем меню
         keyboard = [
             [KeyboardButton("🌐 Открыть сайт", web_app=WebAppInfo(url=WEBSITE_URL))],
             [KeyboardButton("🆘 Связаться с поддержкой")]
@@ -289,14 +274,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ У вас нет прав для этого действия.")
         return
     
-    # Принять запрос (конкретным администратором)
+    # Принять запрос
     if data.startswith('accept_'):
         parts = data.split('_')
         if len(parts) >= 3:
             target_user_id = int(parts[1])
             admin_selector_id = int(parts[2]) if len(parts) > 2 else user_id
             
-            # Проверяем, может ли этот администратор принять запрос
             if admin_selector_id != user_id:
                 await query.edit_message_text(
                     f"❌ Этот запрос предназначен для другого администратора."
@@ -309,7 +293,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             request = active_support_requests[target_user_id]
             
-            # Обновляем статус
             request.update({
                 'status': 'active',
                 'admin_id': user_id,
@@ -317,18 +300,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'admin_name': query.from_user.first_name
             })
             
-            # Обновляем информацию об администраторе
             if user_id in admin_sessions:
                 admin_sessions[user_id]['active_chats'].append(target_user_id)
             
-            # Уведомляем администратора
             await query.edit_message_text(
                 f"✅ Вы приняли запрос от пользователя.\n\n"
                 f"Теперь все ваши сообщения будут пересылаться пользователю.\n"
-                f"Используйте /close_{target_user_id} для завершения чата."
+                f"Используйте /close_{target_user_id} для завершения чата или кнопку ниже."
             )
             
-            # Уведомляем пользователя
+            # Добавляем кнопку для быстрого закрытия чата
+            close_keyboard = [[
+                InlineKeyboardButton(
+                    "🔒 Закрыть этот чат", 
+                    callback_data=f"close_chat_{target_user_id}"
+                )
+            ]]
+            reply_markup = InlineKeyboardMarkup(close_keyboard)
+            
             try:
                 await context.bot.send_message(
                     chat_id=target_user_id,
@@ -339,7 +328,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Не удалось уведомить пользователя: {e}")
             
-            # Обновляем остальные уведомления для других администраторов
+            # Обновляем уведомления других администраторов
             if 'notification_messages' in request:
                 for admin_id, message_id in request['notification_messages']:
                     try:
@@ -358,7 +347,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user_id = int(data.split('_')[1])
         
         if target_user_id in active_support_requests:
-            # Уведомляем пользователя
             try:
                 await context.bot.send_message(
                     chat_id=target_user_id,
@@ -368,47 +356,99 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Не удалось уведомить пользователя: {e}")
             
-            # Удаляем запрос
             del active_support_requests[target_user_id]
         
         await query.edit_message_text("❌ Запрос отклонен.")
     
-    # Закрыть чат
-    elif data.startswith('close_'):
-        target_user_id = int(data.split('_')[1])
+    # Закрыть чат через кнопку
+    elif data.startswith('close_chat_'):
+        target_user_id = int(data.split('_')[2])
         
-        if target_user_id in active_support_requests:
-            request = active_support_requests[target_user_id]
-            
-            # Проверяем, может ли этот администратор закрыть чат
-            if request.get('admin_id') != user_id:
-                await query.edit_message_text("❌ Вы не можете закрыть этот чат.")
-                return
-            
-            # Уведомляем пользователя
-            try:
-                await context.bot.send_message(
-                    chat_id=target_user_id,
-                    text="🔒 *Чат с поддержкой завершен*\n\n"
-                         "Специалист завершил сессию. Если у вас остались вопросы, "
-                         "вы можете создать новый запрос.",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            except Exception as e:
-                logger.error(f"Не удалось уведомить пользователя: {e}")
-            
-            # Обновляем информацию об администраторе
-            if user_id in admin_sessions:
-                admin_sessions[user_id]['active_chats'] = [
-                    chat for chat in admin_sessions[user_id]['active_chats'] 
-                    if chat != target_user_id
-                ]
-            
-            # Удаляем запрос
-            del active_support_requests[target_user_id]
-            await query.edit_message_text("✅ Чат успешно закрыт.")
-        else:
+        if target_user_id not in active_support_requests:
             await query.edit_message_text("❌ Чат уже закрыт.")
+            return
+        
+        request = active_support_requests[target_user_id]
+        
+        # Проверяем, может ли этот администратор закрыть чат
+        if request.get('admin_id') != user_id:
+            await query.edit_message_text("❌ Вы не можете закрыть этот чат.")
+            return
+        
+        # Уведомляем пользователя
+        try:
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text="🔒 *Чат с поддержкой завершен*\n\n"
+                     "Специалист завершил сессию. Если у вас остались вопросы, "
+                     "вы можете создать новый запрос.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Не удалось уведомить пользователя: {e}")
+        
+        # Обновляем информацию об администраторе
+        if user_id in admin_sessions:
+            admin_sessions[user_id]['active_chats'] = [
+                chat for chat in admin_sessions[user_id]['active_chats'] 
+                if chat != target_user_id
+            ]
+        
+        # Удаляем запрос
+        del active_support_requests[target_user_id]
+        await query.edit_message_text(f"✅ Чат с пользователем {target_user_id} успешно закрыт.")
+    
+    # Обновить админ панель
+    elif data == "refresh_admin":
+        if user_id not in admin_sessions:
+            admin_sessions[user_id] = {
+                'username': query.from_user.username,
+                'first_name': query.from_user.first_name,
+                'active_chats': []
+            }
+        
+        waiting_count = sum(1 for req in active_support_requests.values() 
+                           if req['status'] == 'waiting')
+        active_count = sum(1 for req in active_support_requests.values() 
+                          if req['status'] == 'active')
+        
+        admin_active_chats = []
+        for uid, request in active_support_requests.items():
+            if request.get('admin_id') == user_id and request['status'] == 'active':
+                admin_active_chats.append(uid)
+        
+        keyboard = []
+        
+        if waiting_count > 0:
+            keyboard.append([
+                InlineKeyboardButton(f"📥 Запросы в ожидании ({waiting_count})", 
+                                   callback_data="show_waiting")
+            ])
+        
+        if admin_active_chats:
+            keyboard.append([
+                InlineKeyboardButton(f"💬 Мои активные чаты ({len(admin_active_chats)})", 
+                                   callback_data="show_my_chats")
+            ])
+        
+        keyboard.extend([
+            [InlineKeyboardButton("📊 Вся статистика", callback_data="show_stats")],
+            [InlineKeyboardButton("👥 Все активные чаты", callback_data="show_all_active")],
+            [InlineKeyboardButton("🔄 Обновить", callback_data="refresh_admin")]
+        ])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"👑 *Панель администратора*\n\n"
+            f"📈 Ваша статистика:\n"
+            f"• 📥 Ожидающих запросов: {waiting_count}\n"
+            f"• 💬 Ваших активных чатов: {len(admin_active_chats)}\n"
+            f"• 👥 Всего активных чатов: {active_count}\n\n"
+            f"Выберите действие:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Панель администратора"""
@@ -418,36 +458,37 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
-    # Статистика
+    if user_id not in admin_sessions:
+        admin_sessions[user_id] = {
+            'username': update.effective_user.username,
+            'first_name': update.effective_user.first_name,
+            'active_chats': []
+        }
+    
     waiting_count = sum(1 for req in active_support_requests.values() 
                        if req['status'] == 'waiting')
     active_count = sum(1 for req in active_support_requests.values() 
                       if req['status'] == 'active')
     
-    # Активные чаты этого администратора
     admin_active_chats = []
     for uid, request in active_support_requests.items():
         if request.get('admin_id') == user_id and request['status'] == 'active':
             admin_active_chats.append(uid)
     
-    # Создаем клавиатуру
     keyboard = []
     
-    # Кнопки для активных запросов
     if waiting_count > 0:
         keyboard.append([
             InlineKeyboardButton(f"📥 Запросы в ожидании ({waiting_count})", 
                                callback_data="show_waiting")
         ])
     
-    # Кнопки для активных чатов администратора
     if admin_active_chats:
         keyboard.append([
             InlineKeyboardButton(f"💬 Мои активные чаты ({len(admin_active_chats)})", 
                                callback_data="show_my_chats")
         ])
     
-    # Общие кнопки
     keyboard.extend([
         [InlineKeyboardButton("📊 Вся статистика", callback_data="show_stats")],
         [InlineKeyboardButton("👥 Все активные чаты", callback_data="show_all_active")],
@@ -468,7 +509,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def show_active_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать активные запросы (команда)"""
+    """Показать активные запросы"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -479,7 +520,6 @@ async def show_active_requests(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("📭 Нет активных запросов.")
         return
     
-    # Разделяем по статусам
     waiting_requests = []
     active_requests = []
     
@@ -493,7 +533,7 @@ async def show_active_requests(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if waiting_requests:
         message_text += "⏳ *Запросы в ожидании:*\n\n"
-        for uid, request in waiting_requests[:5]:  # Показываем первые 5
+        for uid, request in waiting_requests[:5]:
             user_info = request.get('user_info', {})
             wait_time = (datetime.now() - request['created_at']).seconds // 60
             message_text += (
@@ -569,7 +609,6 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in active_support_requests:
         request = active_support_requests[user_id]
         
-        # Уведомляем администратора, если есть
         if request['status'] == 'active' and 'admin_id' in request:
             admin_id = request['admin_id']
             try:
@@ -577,7 +616,6 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_id=admin_id,
                     text=f"👤 Пользователь ID: {user_id} завершил чат."
                 )
-                # Обновляем информацию об администраторе
                 if admin_id in admin_sessions:
                     admin_sessions[admin_id]['active_chats'] = [
                         chat for chat in admin_sessions[admin_id]['active_chats'] 
@@ -595,61 +633,113 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ У вас нет активных запросов.")
 
 async def close_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Закрытие чата администратором"""
+    """Закрытие чата администратором - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
         await update.message.reply_text("❌ У вас нет прав доступа.")
         return
     
-    if not context.args:
+    # Проверяем, если команда в формате /close_123456789
+    command_text = update.message.text
+    
+    if '_' in command_text:
+        try:
+            # Извлекаем ID пользователя из команды /close_123456789
+            target_user_id = int(command_text.split('_')[1])
+        except (IndexError, ValueError):
+            await update.message.reply_text(
+                "❌ Неверный формат команды.\n"
+                "Использование: /close <user_id>\n"
+                "Или: /close_123456789"
+            )
+            return
+    elif context.args and len(context.args) > 0:
+        try:
+            target_user_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ Неверный ID пользователя.")
+            return
+    else:
+        # Показываем активные чаты этого администратора
+        active_chats = []
+        for uid, request in active_support_requests.items():
+            if request.get('admin_id') == user_id and request['status'] == 'active':
+                active_chats.append(uid)
+        
+        if not active_chats:
+            await update.message.reply_text(
+                "📭 У вас нет активных чатов.\n\n"
+                "Использование:\n"
+                "/close <user_id> - закрыть конкретный чат\n"
+                "/admin - просмотреть активные чаты"
+            )
+            return
+        
+        # Показываем список чатов с кнопками для закрытия
+        keyboard = []
+        for chat_id in active_chats:
+            user_info = active_support_requests.get(chat_id, {}).get('user_info', {})
+            user_name = user_info.get('first_name', f'ID: {chat_id}')
+            
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"🔒 Закрыть чат с {user_name}",
+                    callback_data=f"close_chat_{chat_id}"
+                )
+            ])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await update.message.reply_text(
-            "Использование: /close <user_id>\n"
-            "Пример: /close 123456789"
+            "💬 *Ваши активные чаты:*\n\n"
+            "Выберите чат для закрытия:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
         )
         return
     
+    # Закрываем конкретный чат
+    if target_user_id not in active_support_requests:
+        await update.message.reply_text("❌ Чат не найден.")
+        return
+    
+    request = active_support_requests[target_user_id]
+    
+    # Проверяем, может ли администратор закрыть этот чат
+    if request.get('admin_id') != user_id:
+        await update.message.reply_text(
+            "❌ Вы не можете закрыть этот чат.\n"
+            "Этот чат ведет другой специалист."
+        )
+        return
+    
+    # Уведомляем пользователя
     try:
-        target_user_id = int(context.args[0])
-        
-        if target_user_id not in active_support_requests:
-            await update.message.reply_text("❌ Чат не найден.")
-            return
-        
-        request = active_support_requests[target_user_id]
-        
-        # Проверяем, может ли администратор закрыть этот чат
-        if request.get('admin_id') != user_id:
-            await update.message.reply_text(
-                "❌ Вы не можете закрыть этот чат.\n"
-                "Этот чат ведет другой специалист."
-            )
-            return
-        
-        # Уведомляем пользователя
-        try:
-            await context.bot.send_message(
-                chat_id=target_user_id,
-                text="🔒 *Чат с поддержкой завершен*\n\n"
-                     "Специалист завершил сессию. Спасибо за обращение!",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Не удалось уведомить пользователя: {e}")
-        
-        # Обновляем информацию об администраторе
-        if user_id in admin_sessions:
-            admin_sessions[user_id]['active_chats'] = [
-                chat for chat in admin_sessions[user_id]['active_chats'] 
-                if chat != target_user_id
-            ]
-        
-        # Удаляем запрос
-        del active_support_requests[target_user_id]
-        await update.message.reply_text(f"✅ Чат с пользователем {target_user_id} закрыт.")
-        
-    except ValueError:
-        await update.message.reply_text("❌ Неверный ID пользователя.")
+        await context.bot.send_message(
+            chat_id=target_user_id,
+            text="🔒 *Чат с поддержкой завершен*\n\n"
+                 "Специалист завершил сессию. Спасибо за обращение!",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя: {e}")
+    
+    # Обновляем информацию об администраторе
+    if user_id in admin_sessions:
+        admin_sessions[user_id]['active_chats'] = [
+            chat for chat in admin_sessions[user_id]['active_chats'] 
+            if chat != target_user_id
+        ]
+    
+    # Удаляем запрос
+    user_info = request.get('user_info', {})
+    user_name = user_info.get('first_name', f'ID: {target_user_id}')
+    
+    del active_support_requests[target_user_id]
+    await update.message.reply_text(
+        f"✅ Чат с пользователем {user_name} (ID: {target_user_id}) успешно закрыт."
+    )
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Статистика"""
@@ -665,7 +755,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       if req['status'] == 'active')
     total_users = len(user_sessions)
     
-    # Считаем администраторов онлайн
     online_admins = 0
     for admin_id in ADMIN_IDS:
         if admin_id in admin_sessions:
@@ -685,45 +774,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN
     )
 
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Рассылка сообщений (только для админов)"""
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ У вас нет прав доступа.")
-        return
-    
-    if not context.args:
-        await update.message.reply_text(
-            "📢 *Рассылка сообщений*\n\n"
-            "Использование:\n"
-            "/broadcast <текст сообщения>\n\n"
-            "Пример:\n"
-            "/broadcast Всем привет! Это тестовая рассылка.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-    
-    message = ' '.join(context.args)
-    
-    # Подтверждение
-    keyboard = [
-        [InlineKeyboardButton("✅ Отправить", callback_data="confirm_broadcast")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="cancel_broadcast")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        f"📢 *Подтвердите рассылку:*\n\n"
-        f"{message}\n\n"
-        f"Получателей: {len(user_sessions)}",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=reply_markup
-    )
-    
-    # Сохраняем сообщение
-    context.user_data['broadcast_message'] = message
-
 async def admin_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка сообщений от администраторов"""
     user_id = update.effective_user.id
@@ -731,9 +781,7 @@ async def admin_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if not is_admin(user_id):
         return
     
-    # Если администратор пишет не в ответ на callback, показываем подсказку
     if update.message and not update.message.reply_to_message:
-        # Проверяем, есть ли у администратора активные чаты
         active_chats = []
         for uid, request in active_support_requests.items():
             if request.get('admin_id') == user_id and request['status'] == 'active':
@@ -743,7 +791,7 @@ async def admin_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text(
                 f"💬 У вас {len(active_chats)} активных чатов.\n"
                 f"Ваши сообщения будут отправлены пользователям.\n\n"
-                f"Используйте /close <id> для завершения чата."
+                f"Используйте /close для завершения чата."
             )
         else:
             await update.message.reply_text(
@@ -751,7 +799,7 @@ async def admin_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 "Используйте /admin для управления поддержкой."
             )
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
     logger.error(f"Ошибка: {context.error}", exc_info=True)
 
@@ -766,9 +814,11 @@ def main():
     application.add_handler(CommandHandler("active", show_active_requests))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
-    application.add_handler(CommandHandler("close", close_chat_command))
+    
+    # Обработчик команды close (с паттерном для /close_123456789)
+    application.add_handler(CommandHandler("close", close_chat_command, pattern=r'.*'))
+    
     application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("broadcast", broadcast_command))
     
     # Callback-обработчики
     application.add_handler(CallbackQueryHandler(button_callback))
