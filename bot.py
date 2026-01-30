@@ -7,9 +7,9 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from telegram.constants import ParseMode
 
 # Конфигурация
-BOT_TOKEN = "ВАШ_ТОКЕН_БОТА"
-WEBSITE_URL = "https://ваш-домен.com"
-ADMIN_IDS = [123456789, 987654321]  # ID всех администраторов (добавьте свои)
+BOT_TOKEN = "8213844298:AAHbMtsO6WBT7nzfd7DkwMRLmSBJzruk-3E"
+WEBSITE_URL = "https://www.realtimegroup.ru/"
+ADMIN_IDS = [724770396]  # ID всех администраторов (добавьте свои)
 
 # Хранилище данных (в продакшене используйте БД)
 active_support_requests: Dict[int, Dict] = {}  # Запросы в поддержку
