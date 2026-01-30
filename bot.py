@@ -495,8 +495,8 @@ async def broadcast_settings_handler(message: Message):
     await message.answer(message_text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
 @router.message(F.text == "ℹ️ Информация")
-async def info_handler(message: Message):
-    """Информация о боте"""
+async def info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Информация о боте с фото"""
     info_text = (
         "🤖 *Информация о боте*\n\n"
         "Этот бот предоставляет:\n"
@@ -512,6 +512,24 @@ async def info_handler(message: Message):
         "• Оценка помогает улучшить качество поддержки\n\n"
         "Специалисты подключаются к чату в рабочее время."
     )
+
+    try:
+            # Если у вас есть файл bot_info.jpg в директории
+            with open('bot_info.jpg', 'rb') as photo:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=info_text,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=ReplyKeyboardMarkup(get_main_keyboard(), resize_keyboard=True)
+                )
+        except (FileNotFoundError, Exception) as e2:
+            logger.error(f"Не удалось отправить фото из файла: {e2}")
+            # Вариант 3: Если нет фото, отправляем просто текст
+            await update.message.reply_text(
+                info_text,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=ReplyKeyboardMarkup(get_main_keyboard(), resize_keyboard=True)
+            )
     
     await message.answer(info_text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
