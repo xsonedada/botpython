@@ -305,7 +305,6 @@ async def cmd_help(message: Message):
             "📢 Рассылка включена по умолчанию, можно отписаться в настройках."
         )
     
-    await message.answer(help_text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
 @router.message(F.text == "🎁 Получить промо-код")
 async def get_promo_code_handler(message: Message):
