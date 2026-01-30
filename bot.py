@@ -266,7 +266,7 @@ async def cmd_start(message: Message):
         try:
             await message.answer_photo(
                 photo=START_PHOTO_URL,
-                caption="✨ Добро пожаловать!",
+                caption=welcome_text,
                 parse_mode=ParseMode.MARKDOWN
             )
         except Exception as e:
