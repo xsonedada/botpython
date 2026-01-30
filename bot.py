@@ -261,18 +261,22 @@ async def cmd_start(message: Message):
         "• ℹ️ Информация - о возможностях бота"
     )
     
-    # Сначала отправляем фото (если есть)
+    # Пытаемся отправить фото с текстом
     if START_PHOTO_URL:
         try:
             await message.answer_photo(
                 photo=START_PHOTO_URL,
                 caption=welcome_text,
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_main_keyboard()
             )
+            save_data()
+            return  # Выходим из функции, чтобы не отправлять второе сообщение
         except Exception as e:
             logger.error(f"Ошибка отправки фото при старте: {e}")
+            # Если не удалось отправить фото, продолжаем без него
     
-    # Затем отправляем приветственное сообщение
+    # Если фото нет или произошла ошибка, отправляем только текст
     await message.answer(welcome_text, reply_markup=get_main_keyboard())
     save_data()
 
