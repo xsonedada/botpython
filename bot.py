@@ -19,7 +19,7 @@ import asyncio
 BOT_TOKEN = "8213844298:AAHbMtsO6WBT7nzfd7DkwMRLmSBJzruk-3E"
 WEBSITE_URL = "https://www.realtimegroup.ru/"
 INFO_PHOTO_URL = "https://www.realtimegroup.ru/bot_info.png"
-INFO_PHOTO_URL2 = "https://www.realtimegroup.ru/hello.png" 
+INFO_PHOTO_URLS = "https://www.realtimegroup.ru/hello.png" 
 ADMIN_IDS = [724770396]  # ID всех администраторов
 DATA_FILE = "bot_data.json"  # Файл для сохранения данных
 
@@ -265,7 +265,7 @@ async def cmd_start(message: Message):
         try:
             # Сначала отправляем фото с подписью
             await message.answer_photo(
-                photo=INFO_PHOTO_URL2,
+                photo=INFO_PHOTO_URLS,
                 caption=info_text,
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=get_main_keyboard()
