@@ -35,7 +35,6 @@ pip install -r requirements.txt
 3. Настройте переменные окружения
 Создайте файл .env в корне проекта:
 
-ini
 ```bash
 BOT_TOKEN=ваш_токен_от_@BotFather
 ADMIN_IDS=123456789,987654321  # ID менеджеров (через запятую)
