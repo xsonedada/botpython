@@ -16,11 +16,11 @@ import asyncio
 
 
 # Конфигурация
-BOT_TOKEN = "8213844298:AAHbMtsO6WBT7nzfd7DkwMRLmSBJzruk-3E"
-WEBSITE_URL = "https://www.realtimegroup.ru/"
-INFO_PHOTO_URL = "https://www.realtimegroup.ru/bot_info.png"
-START_PHOTO_URL = "https://www.realtimegroup.ru/hello.png" 
-ADMIN_IDS = [724770396]  # ID всех администраторов
+BOT_TOKEN = ""
+WEBSITE_URL = ""
+INFO_PHOTO_URL = ""
+START_PHOTO_URL = "" 
+ADMIN_IDS = []  # ID всех администраторов
 DATA_FILE = "bot_data.json"  # Файл для сохранения данных
 
 # Хранилище данных
