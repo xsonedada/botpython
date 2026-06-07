@@ -36,10 +36,12 @@ pip install -r requirements.txt
 В BOT.PY укажите данные, требующиеся для работы бота
 
 ```bash
-BOT_TOKEN=ваш_токен_от_@BotFather
-ADMIN_IDS=123456789,987654321  # ID менеджеров (через запятую)
-WEBHOOK_URL=                   # если используется вебхук (опционально)
-DATABASE_URL=sqlite:///support.db
+BOT_TOKEN = ""
+WEBSITE_URL = ""
+INFO_PHOTO_URL = ""
+START_PHOTO_URL = "" 
+ADMIN_IDS = []  # ID всех администраторов
+DATA_FILE = "bot_data.json"  # Файл для сохранения данных -> по просьбе есть возможность переделать под pgsql
 ```
 4. Запустите бота
 ```bash
