@@ -33,7 +33,7 @@ venv\Scripts\activate     # Windows
 pip install -r requirements.txt
 ```
 3. Настройте переменные окружения
-Создайте файл .env в корне проекта:
+В BOT.PY укажите данные, требующиеся для работы бота
 
 ```bash
 BOT_TOKEN=ваш_токен_от_@BotFather
